@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Network Config</title>
+  <style>
+    body{font-family:Raleway,Segoe UI,sans-serif;background:#eef2f7;margin:0}
+    .top{background:#111827;color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center}
+    .nav a{color:#c7d2fe;text-decoration:none;margin-right:12px;font-weight:600}
+    .wrap{max-width:860px;margin:16px auto;padding:0 12px}
+    .card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 8px 18px rgba(0,0,0,.08)}
+    h3{margin-bottom:8px} label{display:block;font-weight:600;margin:8px 0 6px} input{width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:10px} @media(max-width:640px){.row{grid-template-columns:1fr}}
+    button{margin-top:14px;padding:10px 14px;border:0;border-radius:8px;background:#0f766e;color:#fff;font-weight:700;cursor:pointer}
+    .msg{margin-top:10px;padding:10px;border-radius:8px;display:none}
+    .ok{background:#dcfce7;color:#166534;border:1px solid #86efac}
+    .err{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
+    .pw{display:grid;grid-template-columns:1fr 44px;gap:8px;align-items:center}
+    .eye{padding:10px 0;background:#334155;color:#fff;border-radius:8px;border:0;cursor:pointer}
+    .summary{padding:10px;border:1px dashed #94a3b8;border-radius:8px;background:#f8fafc;color:#334155;margin-bottom:10px}
+    .static-box{padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc}
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div><strong>Network Config STA + AP</strong></div>
+    <div class="nav">
+      <a href="/index.html">Dashboard</a>
+      <a href="/mqtt_setting.html">MQTT Config</a>
+      <a href="/network_setting.html">Network Config</a>
+      <a href="/mems_setting.html">MEMS Config</a>
+      <a href="/system_setting.html">System</a>
+    </div>
+  </div>
+  <div class="wrap"><div class="card">
+    <div class="summary" id="summary">Current: loading...</div>
+    <form id="f">
+      <h3>STA (Client)</h3>
+      <label>WiFi SSID</label><input name="ssid">
+      <label>WiFi Password</label>
+      <div class="pw"><input id="sta_password" name="password" type="password"><button type="button" class="eye" id="toggleStaPw">&#128065;</button></div>
+
+      <label><input type="checkbox" id="sta_use_static_ip"> Use Static IP (STA)</label>
+      <div class="static-box" id="staticBox">
+        <div class="row">
+          <div><label>Static IP</label><input name="sta_static_ip" placeholder="192.168.1.50"></div>
+          <div><label>Gateway</label><input name="sta_gateway" placeholder="192.168.1.1"></div>
+          <div><label>Subnet</label><input name="sta_subnet" placeholder="255.255.255.0"></div>
+          <div><label>DNS1</label><input name="sta_dns1" placeholder="8.8.8.8"></div>
+          <div><label>DNS2</label><input name="sta_dns2" placeholder="1.1.1.1"></div>
+        </div>
+      </div>
+
+      <h3>AP (Access Point)</h3>
+      <label>AP SSID</label><input name="ap_ssid">
+      <label>AP Password (>=8)</label>
+      <div class="pw"><input id="ap_password" name="ap_password" type="password" minlength="8"><button type="button" class="eye" id="toggleApPw">&#128065;</button></div>
+
+      <div class="row">
+        <label><input type="checkbox" id="ap_enabled" checked> AP Enabled</label>
+        <div id="state">State: -</div>
+      </div>
+      <button type="submit">Save Network Config</button>
+    </form>
+    <div class="msg" id="msg"></div>
+  </div></div>
+<script>
+const f=document.getElementById('f'); const msg=document.getElementById('msg');
+const summary=document.getElementById('summary');
+function setv(name,v){const e=f.querySelector(`[name="${name}"]`); if(e) e.value=v||'';}
+function toggle(id,btn){ const p=document.getElementById(id); const b=document.getElementById(btn); const show=p.type==='password'; p.type=show?'text':'password'; b.innerHTML=show?'&#128064;':'&#128065;'; }
+function showMsg(ok, text) {
+  msg.style.display = 'block';
+  msg.className = `msg ${ok ? 'ok' : 'err'}`;
+  msg.textContent = text;
+}
+
+document.getElementById('toggleStaPw').onclick=()=>toggle('sta_password','toggleStaPw');
+document.getElementById('toggleApPw').onclick=()=>toggle('ap_password','toggleApPw');
+
+document.getElementById('sta_use_static_ip').addEventListener('change', ()=>{
+  document.getElementById('staticBox').style.opacity = document.getElementById('sta_use_static_ip').checked ? '1' : '0.6';
+});
+
+fetch('/api/config').then(r=>r.json()).then(c=>{
+  setv('ssid', c.wifi?.ssid); setv('password', c.wifi?.password);
+  setv('ap_ssid', c.wifi?.ap_ssid); setv('ap_password', c.wifi?.ap_password);
+  setv('sta_static_ip', c.wifi?.sta_static_ip); setv('sta_gateway', c.wifi?.sta_gateway);
+  setv('sta_subnet', c.wifi?.sta_subnet); setv('sta_dns1', c.wifi?.sta_dns1); setv('sta_dns2', c.wifi?.sta_dns2);
+  document.getElementById('ap_enabled').checked = c.wifi?.ap_enabled !== false;
+  document.getElementById('sta_use_static_ip').checked = c.wifi?.sta_use_static_ip === true;
+  document.getElementById('state').textContent = `State: ${c.wifi?.state || '-'}`;
+  const apShown = c.wifi?.ap_ssid || c.wifi?.ap_ssid_effective || '-';
+  summary.textContent = `Current STA: ${c.wifi?.ssid || '-'} (${c.wifi?.sta_use_static_ip ? 'Static IP' : 'DHCP'}) | AP: ${apShown} | State: ${c.wifi?.state || '-'}`;
+  if (!c.wifi?.ap_ssid) {
+    const apField = f.querySelector('[name="ap_ssid"]');
+    if (apField) apField.placeholder = c.wifi?.ap_ssid_effective || 'VIOT_XXXX';
+  }
+  document.getElementById('staticBox').style.opacity = document.getElementById('sta_use_static_ip').checked ? '1' : '0.6';
+}).catch(()=>{ summary.textContent='Current: unavailable'; });
+
+f.onsubmit=async (e)=>{
+  e.preventDefault();
+  const fd=new FormData(f);
+  fd.append('ap_enabled', document.getElementById('ap_enabled').checked ? '1' : '0');
+  fd.append('sta_use_static_ip', document.getElementById('sta_use_static_ip').checked ? '1' : '0');
+  const res=await fetch('/api/network_config',{method:'POST',body:fd});
+  const t=await res.text();
+  showMsg(res.ok, res.ok ? 'Success: network config saved and applied.' : `Save failed: ${t}`);
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FIoT Dashboard</title>
+  <style>
+    :root{--bg:#f2f5f9;--card:#fff;--ink:#0f172a;--muted:#475569}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:"Raleway",Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
+    .top{background:#111827;color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center}
+    .nav a{color:#c7d2fe;text-decoration:none;margin-right:12px;font-weight:600}
+    .wrap{max-width:1200px;margin:16px auto;padding:0 12px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+    .card{background:var(--card);border-radius:12px;padding:14px;box-shadow:0 6px 18px rgba(0,0,0,.08)}
+    .label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+    .val{font-size:28px;font-weight:700;margin-top:6px}
+    .unit{font-size:14px;color:var(--muted)}
+    .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+    canvas{width:100%;height:280px;background:#fff;border:1px solid #cbd5e1;border-radius:8px}
+    textarea{width:100%;height:180px;border:1px solid #cbd5e1;border-radius:8px;padding:10px;font-family:Consolas,monospace}
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div><strong>FIoT Dashboard</strong></div>
+    <div class="nav">
+      <a href="/index.html">Dashboard</a>
+      <a href="/mqtt_setting.html">MQTT Config</a>
+      <a href="/network_setting.html">Network Config</a>
+      <a href="/mems_setting.html">MEMS Config</a>
+      <a href="/system_setting.html">System</a>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="grid">
+      <div class="card"><div class="label">G X Axis</div><div class="val" id="gx">0</div></div>
+      <div class="card"><div class="label">G Y Axis</div><div class="val" id="gy">0</div></div>
+      <div class="card"><div class="label">G Z Axis</div><div class="val" id="gz">0</div></div>
+      <div class="card"><div class="label">Velocity X</div><div class="val" id="vx">0 <span class="unit">mm/s</span></div></div>
+      <div class="card"><div class="label">Velocity Y</div><div class="val" id="vy">0 <span class="unit">mm/s</span></div></div>
+      <div class="card"><div class="label">Velocity Z</div><div class="val" id="vz">0 <span class="unit">mm/s</span></div></div>
+      <div class="card"><div class="label">Frequency X</div><div class="val" id="fx">0 <span class="unit">Hz</span></div></div>
+      <div class="card"><div class="label">Frequency Y</div><div class="val" id="fy">0 <span class="unit">Hz</span></div></div>
+      <div class="card"><div class="label">Frequency Z</div><div class="val" id="fz">0 <span class="unit">Hz</span></div></div>
+      <div class="card"><div class="label">Battery Voltage</div><div class="val" id="battery_v">0 <span class="unit">V</span></div></div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="row" style="margin-bottom:10px">
+        <strong>FFT Spectrum 10 - 1200 Hz (Amplitude 0 - 30 mm/s)</strong>
+        <label for="axisSelect">Axis:</label>
+        <select id="axisSelect"><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select>
+        <label for="scaleMode">Scale:</label>
+        <select id="scaleMode">
+          <option value="5">0 - 5 mm/s</option>
+          <option value="10">0 - 10 mm/s</option>
+          <option value="15">0 - 15 mm/s</option>
+          <option value="20">0 - 20 mm/s</option>
+          <option value="25">0 - 25 mm/s</option>
+          <option value="30">0 - 30 mm/s</option>
+          <option value="auto" selected>Auto</option>
+        </select>
+      </div>
+      <canvas id="fftCanvas" width="1100" height="300"></canvas>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="label">Last MQTT Payload</div>
+      <textarea id="lastPayload" readonly>{}</textarea>
+    </div>
+  </div>
+
+<script>
+  function fmt(v,d=3){ return Number(v||0).toFixed(d); }
+  function setText(id,text){ const el=document.getElementById(id); if(el) el.textContent=text; }
+
+  function applyData(d){
+    if(!d) return;
+    setText('gx', fmt(d.accel?.x));
+    setText('gy', fmt(d.accel?.y));
+    setText('gz', fmt(d.accel?.z));
+    setText('vx', `${fmt(d.velocity?.x,2)} mm/s`);
+    setText('vy', `${fmt(d.velocity?.y,2)} mm/s`);
+    setText('vz', `${fmt(d.velocity?.z,2)} mm/s`);
+    setText('fx', `${fmt(d.vibration_freq?.x,2)} Hz`);
+    setText('fy', `${fmt(d.vibration_freq?.y,2)} Hz`);
+    setText('fz', `${fmt(d.vibration_freq?.z,2)} Hz`);
+    setText('battery_v', `${fmt(d.battery,2)} V`);
+  }
+
+  function drawSpectrum(freq, amp){
+    const canvas=document.getElementById('fftCanvas');
+    const ctx=canvas.getContext('2d');
+    const w=canvas.width,h=canvas.height;
+    ctx.clearRect(0,0,w,h);
+    const padL=50,padR=20,padT=20,padB=28;
+    const x0=padL,y0=h-padB,plotW=w-padL-padR,plotH=h-padT-padB;
+
+    ctx.strokeStyle='#94a3b8'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x0,padT); ctx.lineTo(x0,y0); ctx.lineTo(x0+plotW,y0); ctx.stroke();
+
+    const minF=10,maxF=1200,minA=0;
+    const scaleMode = document.getElementById('scaleMode').value;
+    let maxA = 30;
+    if (scaleMode === 'auto' && amp && amp.length > 0) {
+      let maxVal = 0;
+      for (let i = 0; i < amp.length; i++) {
+        const v = Number(amp[i]) || 0;
+        if (v > maxVal) maxVal = v;
+      }
+      maxA = Math.max(1, Math.ceil(maxVal * 1.2));
+    } else if (scaleMode !== 'auto') {
+      const parsed = Number(scaleMode);
+      if (!Number.isNaN(parsed) && parsed > 0) {
+        maxA = parsed;
+      }
+    }
+    const sx=f=>x0+((f-minF)/(maxF-minF))*plotW;
+    const sy=a=>y0-((a-minA)/(maxA-minA))*plotH;
+
+    [10,100,300,600,900,1200].forEach(f=>{const x=sx(f);ctx.strokeStyle='#e2e8f0';ctx.beginPath();ctx.moveTo(x,padT);ctx.lineTo(x,y0);ctx.stroke();ctx.fillStyle='#475569';ctx.fillText(String(f),x-10,h-8);});
+    const yTicks = 6;
+    for (let i = 0; i <= yTicks; i++) {
+      const a = (maxA / yTicks) * i;
+      const y = sy(a);
+      ctx.strokeStyle='#e2e8f0';
+      ctx.beginPath(); ctx.moveTo(x0,y); ctx.lineTo(x0+plotW,y); ctx.stroke();
+      ctx.fillStyle='#475569'; ctx.fillText(a.toFixed(1), 6, y+4);
+    }
+
+    if(!freq || !amp || freq.length===0) return;
+    ctx.strokeStyle='#2563eb'; ctx.lineWidth=2; ctx.beginPath();
+    for(let i=0;i<freq.length;i++){
+      const x=sx(Number(freq[i]));
+      let a=Number(amp[i]); if(a<0)a=0; if(a>maxA)a=maxA;
+      const y=sy(a);
+      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+  }
+
+  async function loadSpectrum(){
+    const axis=document.getElementById('axisSelect').value;
+    try{
+      const r=await fetch(`/api/fft_spectrum?axis=${axis}`);
+      const d=await r.json();
+      drawSpectrum(d.freq_hz||[], d.amp_mm_s||[]);
+    }catch(_){ }
+  }
+
+  async function loadLastPayload(){
+    try{
+      const r=await fetch('/api/last_mqtt_payload');
+      const t=await r.text();
+      document.getElementById('lastPayload').value = t;
+    }catch(_){ }
+  }
+
+  function pollStatus(){
+    fetch('/api/status').then(r=>r.json()).then(s=>{
+      if(!s) return;
+      setText('battery_v', `${fmt(s.battery_v,2)} V`);
+    }).catch(()=>{});
+  }
+
+  function startWs(){
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${location.host}/ws`);
+    ws.onmessage = ev => { try { applyData(JSON.parse(ev.data)); } catch(_){} };
+    ws.onclose = () => setTimeout(startWs, 2000);
+  }
+
+  document.getElementById('axisSelect').addEventListener('change', loadSpectrum);
+  document.getElementById('scaleMode').addEventListener('change', loadSpectrum);
+  setInterval(loadSpectrum, 4000);
+  setInterval(loadLastPayload, 4000);
+  setInterval(pollStatus, 4000);
+  loadSpectrum(); loadLastPayload(); pollStatus(); startWs();
+</script>
+</body>
+</html>
