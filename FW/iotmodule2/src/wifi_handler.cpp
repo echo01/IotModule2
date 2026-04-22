@@ -137,6 +137,7 @@ bool WiFiHandler::startAPMode(const String& ap_ssid, const String& ap_password) 
 
     ap_started = true;
     INFO_PRINT("AP started: %s", resolved_ssid.c_str());
+    INFO_PRINT("AP Password: %s", resolved_password.c_str());
     INFO_PRINT("AP IP: %s", WiFi.softAPIP().toString().c_str());
     return true;
 }
