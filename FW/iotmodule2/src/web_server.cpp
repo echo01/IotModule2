@@ -312,6 +312,14 @@ void WebServer::handleGetConfig(AsyncWebServerRequest* request) {
     doc["adxl345"]["offset_z"] = g_system_config.adxl345_offset_z;
     doc["adxl345"]["int_threshold_mg"] = g_system_config.adxl345_int_threshold_mg;
     doc["adxl345"]["int_enabled"] = g_system_config.adxl345_int_enabled;
+    
+    doc["vibration"]["min_rms_g"] = g_system_config.vibration_min_rms_g;
+    doc["vibration"]["min_peak_g"] = g_system_config.vibration_min_peak_g;
+    doc["vibration"]["noise_floor_db"] = g_system_config.vibration_noise_floor_db;
+    doc["vibration"]["deadband_g"] = g_system_config.vibration_deadband_g;
+    doc["vibration"]["min_freq_hz"] = g_system_config.vibration_min_freq_hz;
+    doc["vibration"]["max_freq_hz"] = g_system_config.vibration_max_freq_hz;
+    
     doc["power"]["sleep_enabled"] = g_system_config.sleep_enabled;
 
     String json;
@@ -456,6 +464,14 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     float offset_z = request->hasParam("offset_z", true) ? request->getParam("offset_z", true)->value().toFloat() : g_system_config.adxl345_offset_z;
     uint16_t int_threshold_mg = request->hasParam("int_threshold_mg", true) ? static_cast<uint16_t>(request->getParam("int_threshold_mg", true)->value().toInt()) : g_system_config.adxl345_int_threshold_mg;
     bool int_enabled = !request->hasParam("int_enabled", true) || request->getParam("int_enabled", true)->value() == "1";
+    
+    // Vibration parameters
+    float min_rms_g = request->hasParam("min_rms_g", true) ? request->getParam("min_rms_g", true)->value().toFloat() : g_system_config.vibration_min_rms_g;
+    float min_peak_g = request->hasParam("min_peak_g", true) ? request->getParam("min_peak_g", true)->value().toFloat() : g_system_config.vibration_min_peak_g;
+    float noise_floor_db = request->hasParam("noise_floor_db", true) ? request->getParam("noise_floor_db", true)->value().toFloat() : g_system_config.vibration_noise_floor_db;
+    float deadband_g = request->hasParam("deadband_g", true) ? request->getParam("deadband_g", true)->value().toFloat() : g_system_config.vibration_deadband_g;
+    float min_freq_hz = request->hasParam("min_freq_hz", true) ? request->getParam("min_freq_hz", true)->value().toFloat() : g_system_config.vibration_min_freq_hz;
+    float max_freq_hz = request->hasParam("max_freq_hz", true) ? request->getParam("max_freq_hz", true)->value().toFloat() : g_system_config.vibration_max_freq_hz;
 
     g_system_config.adxl345_rate_hz = rate_hz;
     g_system_config.adxl345_range_g = range_g;
@@ -464,6 +480,13 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     g_system_config.adxl345_offset_z = offset_z;
     g_system_config.adxl345_int_threshold_mg = int_threshold_mg;
     g_system_config.adxl345_int_enabled = int_enabled;
+    
+    g_system_config.vibration_min_rms_g = min_rms_g;
+    g_system_config.vibration_min_peak_g = min_peak_g;
+    g_system_config.vibration_noise_floor_db = noise_floor_db;
+    g_system_config.vibration_deadband_g = deadband_g;
+    g_system_config.vibration_min_freq_hz = min_freq_hz;
+    g_system_config.vibration_max_freq_hz = max_freq_hz;
 
     if (!g_storage.saveConfig(g_system_config)) {
         request->send(500, "application/json", "{\"error\":\"save failed\"}");

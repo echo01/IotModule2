@@ -167,6 +167,14 @@ SystemConfig Storage::createDefaultConfig() {
     config.adxl345_int_threshold_mg = 250;
     config.adxl345_int_enabled = true;
     
+    // Vibration signal validation defaults
+    config.vibration_min_rms_g = VIBRATION_MIN_RMS_G;
+    config.vibration_min_peak_g = VIBRATION_MIN_PEAK_G;
+    config.vibration_noise_floor_db = VIBRATION_NOISE_FLOOR_DB;
+    config.vibration_deadband_g = VIBRATION_DEADBAND_G;
+    config.vibration_min_freq_hz = VIBRATION_MIN_FREQUENCY_HZ;
+    config.vibration_max_freq_hz = VIBRATION_MAX_FREQUENCY_HZ;
+    
     // Power defaults
     config.sleep_enabled = true;
     config.sleep_interval_sec = DEEP_SLEEP_INTERVAL_SEC;
@@ -210,6 +218,13 @@ DynamicJsonDocument Storage::config_to_json(const SystemConfig& config) {
     doc["adxl345"]["offset_z"] = config.adxl345_offset_z;
     doc["adxl345"]["int_threshold_mg"] = config.adxl345_int_threshold_mg;
     doc["adxl345"]["int_enabled"] = config.adxl345_int_enabled;
+    
+    doc["vibration"]["min_rms_g"] = config.vibration_min_rms_g;
+    doc["vibration"]["min_peak_g"] = config.vibration_min_peak_g;
+    doc["vibration"]["noise_floor_db"] = config.vibration_noise_floor_db;
+    doc["vibration"]["deadband_g"] = config.vibration_deadband_g;
+    doc["vibration"]["min_freq_hz"] = config.vibration_min_freq_hz;
+    doc["vibration"]["max_freq_hz"] = config.vibration_max_freq_hz;
     
     doc["power"]["sleep_enabled"] = config.sleep_enabled;
     doc["power"]["sleep_interval_sec"] = config.sleep_interval_sec;
@@ -283,6 +298,13 @@ SystemConfig Storage::json_to_config(const JsonDocument& doc) {
     config.adxl345_offset_z = doc["adxl345"]["offset_z"] | 0.0f;
     config.adxl345_int_threshold_mg = doc["adxl345"]["int_threshold_mg"] | 250;
     config.adxl345_int_enabled = doc["adxl345"]["int_enabled"] | true;
+    
+    config.vibration_min_rms_g = doc["vibration"]["min_rms_g"] | VIBRATION_MIN_RMS_G;
+    config.vibration_min_peak_g = doc["vibration"]["min_peak_g"] | VIBRATION_MIN_PEAK_G;
+    config.vibration_noise_floor_db = doc["vibration"]["noise_floor_db"] | VIBRATION_NOISE_FLOOR_DB;
+    config.vibration_deadband_g = doc["vibration"]["deadband_g"] | VIBRATION_DEADBAND_G;
+    config.vibration_min_freq_hz = doc["vibration"]["min_freq_hz"] | VIBRATION_MIN_FREQUENCY_HZ;
+    config.vibration_max_freq_hz = doc["vibration"]["max_freq_hz"] | VIBRATION_MAX_FREQUENCY_HZ;
     
     config.sleep_enabled = doc["power"]["sleep_enabled"] | true;
     config.sleep_interval_sec = doc["power"]["sleep_interval_sec"] | DEEP_SLEEP_INTERVAL_SEC;

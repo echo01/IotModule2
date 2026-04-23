@@ -55,6 +55,14 @@
 #define FFT_FREQUENCY_RESOLUTION (MEMS_SAMPLING_RATE / FFT_SIZE)
 #define RMS_HIGHPASS_CUTOFF_HZ  10.0f
 
+/* ========== VIBRATION SIGNAL VALIDATION ========== */
+#define VIBRATION_MIN_RMS_G         0.02f   // Minimum RMS acceleration for valid vibration
+#define VIBRATION_MIN_PEAK_G        0.05f   // Minimum peak acceleration for valid vibration
+#define VIBRATION_NOISE_FLOOR_DB    -20.0f  // FFT noise floor threshold (dB)
+#define VIBRATION_DEADBAND_G        0.005f  // Zero-crossing deadband threshold
+#define VIBRATION_MIN_FREQUENCY_HZ  5.0f    // Minimum detectable frequency
+#define VIBRATION_MAX_FREQUENCY_HZ  1000.0f // Maximum detectable frequency
+
 /* ========== BATTERY MONITORING ========== */
 #define ADC_RESOLUTION          12        // bits (0-4095)
 #define ADC_REFERENCE_VOLTAGE   3.3f      // V

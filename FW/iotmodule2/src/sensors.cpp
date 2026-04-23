@@ -39,7 +39,47 @@ bool readRegisters(uint8_t reg, uint8_t* buffer, size_t len) {
     }
     return true;
 }
+} // end anonymous namespace
 
+// Signal validation function - needs access to global config
+bool validateVibrationSignal(const float* data, uint32_t count, float filtered_rms_g, float& peak_g) {
+    if (data == nullptr || count < 2) {
+        peak_g = 0.0f;
+        return false;
+    }
+
+    // Remove DC offset before peak detection.
+    float mean = 0.0f;
+    for (uint32_t i = 0; i < count; ++i) {
+        mean += data[i];
+    }
+    mean /= static_cast<float>(count);
+
+    float max_abs = 0.0f;
+    for (uint32_t i = 0; i < count; ++i) {
+        float value = data[i] - mean;
+        float abs_val = fabs(value);
+        if (abs_val > max_abs) {
+            max_abs = abs_val;
+        }
+    }
+
+    peak_g = max_abs;
+
+    // Check against thresholds using filtered RMS and DC-removed peak.
+    bool valid = (filtered_rms_g >= g_system_config.vibration_min_rms_g) &&
+                 (peak_g >= g_system_config.vibration_min_peak_g);
+
+    if (g_debug_mode) {
+        DEBUG_PRINT("Signal validation: RMS=%.4fG Peak=%.4fG Valid=%s (min_rms=%.4fG min_peak=%.4fG)",
+                   filtered_rms_g, peak_g, valid ? "YES" : "NO",
+                   g_system_config.vibration_min_rms_g, g_system_config.vibration_min_peak_g);
+    }
+
+    return valid;
+}
+
+// Zero-crossing frequency calculation - needs access to global config
 float calculateZeroCrossFrequency(const float* data, uint32_t count, uint16_t sample_rate_hz) {
     if (data == nullptr || count < 3 || sample_rate_hz == 0) {
         return 0.0f;
@@ -52,8 +92,8 @@ float calculateZeroCrossFrequency(const float* data, uint32_t count, uint16_t sa
     }
     mean /= static_cast<float>(count);
 
-    // Deadband reduces false crossings from small noise around zero.
-    const float deadband_g = 0.003f;
+    // Enhanced deadband threshold for noise rejection
+    const float deadband_g = g_system_config.vibration_deadband_g;
     const float dt = 1.0f / static_cast<float>(sample_rate_hz);
 
     uint32_t crossing_count = 0;
@@ -64,6 +104,7 @@ float calculateZeroCrossFrequency(const float* data, uint32_t count, uint16_t sa
     for (uint32_t i = 1; i < count; ++i) {
         float curr = data[i] - mean;
 
+        // Enhanced deadband: ignore small oscillations around zero
         if (fabs(prev) < deadband_g || fabs(curr) < deadband_g) {
             prev = curr;
             continue;
@@ -101,7 +142,6 @@ float calculateZeroCrossFrequency(const float* data, uint32_t count, uint16_t sa
         return 0.0f;
     }
     return frequency_hz;
-}
 }
 
 MEMSSensor::MEMSSensor()
@@ -178,29 +218,116 @@ bool MEMSSensor::readRawData(MEMSData& data) {
 
 bool MEMSSensor::processVibrationData(const MEMSData& raw_data, VibrationAnalysis& analysis) {
     analysis.timestamp_us = raw_data.timestamp_us;
+
+    // Calculate RMS for each axis
     analysis.rms_accel_x = calculateRMS(raw_data.accel_x, raw_data.sample_count);
     analysis.rms_accel_y = calculateRMS(raw_data.accel_y, raw_data.sample_count);
     analysis.rms_accel_z = calculateRMS(raw_data.accel_z, raw_data.sample_count);
 
+    // Signal validation for each axis using filtered RMS values
+    float peak_x = 0.0f;
+    float peak_y = 0.0f;
+    float peak_z = 0.0f;
+    bool valid_x = validateVibrationSignal(raw_data.accel_x, raw_data.sample_count, analysis.rms_accel_x, peak_x);
+    bool valid_y = validateVibrationSignal(raw_data.accel_y, raw_data.sample_count, analysis.rms_accel_y, peak_y);
+    bool valid_z = validateVibrationSignal(raw_data.accel_z, raw_data.sample_count, analysis.rms_accel_z, peak_z);
+
+    // Calculate velocity only for valid signals from filtered RMS
     const float integration_factor = G_TO_MMS2 / (current_rate_hz * 2 * PI);
-    analysis.rms_velocity_x = analysis.rms_accel_x * integration_factor;
-    analysis.rms_velocity_y = analysis.rms_accel_y * integration_factor;
-    analysis.rms_velocity_z = analysis.rms_accel_z * integration_factor;
+    if (valid_x) {
+        analysis.rms_velocity_x = analysis.rms_accel_x * integration_factor;
+    } else {
+        analysis.rms_velocity_x = 0.0f;
+    }
 
-    performFFT(raw_data.accel_x, raw_data.sample_count, analysis.fft_peak_freq_x, analysis.fft_power_x);
-    performFFT(raw_data.accel_y, raw_data.sample_count, analysis.fft_peak_freq_y, analysis.fft_power_y);
-    performFFT(raw_data.accel_z, raw_data.sample_count, analysis.fft_peak_freq_z, analysis.fft_power_z);
-    buildDisplaySpectrum(raw_data.accel_x, raw_data.sample_count, spectrum_x);
-    buildDisplaySpectrum(raw_data.accel_y, raw_data.sample_count, spectrum_y);
-    buildDisplaySpectrum(raw_data.accel_z, raw_data.sample_count, spectrum_z);
+    if (valid_y) {
+        analysis.rms_velocity_y = analysis.rms_accel_y * integration_factor;
+    } else {
+        analysis.rms_velocity_y = 0.0f;
+    }
 
-    // Vibration frequency from raw data using zero-crossing per axis.
-    analysis.vibration_freq_x = calculateZeroCrossFrequency(raw_data.accel_x, raw_data.sample_count, current_rate_hz);
-    analysis.vibration_freq_y = calculateZeroCrossFrequency(raw_data.accel_y, raw_data.sample_count, current_rate_hz);
-    analysis.vibration_freq_z = calculateZeroCrossFrequency(raw_data.accel_z, raw_data.sample_count, current_rate_hz);
+    if (valid_z) {
+        analysis.rms_velocity_z = analysis.rms_accel_z * integration_factor;
+    } else {
+        analysis.rms_velocity_z = 0.0f;
+    }
 
+    // Perform FFT and frequency analysis only for valid signals
+    if (valid_x) {
+        performFFT(raw_data.accel_x, raw_data.sample_count, analysis.fft_peak_freq_x, analysis.fft_power_x);
+        analysis.vibration_freq_x = calculateZeroCrossFrequency(raw_data.accel_x, raw_data.sample_count, current_rate_hz);
+        // Validate frequency range
+        if (analysis.vibration_freq_x < g_system_config.vibration_min_freq_hz ||
+            analysis.vibration_freq_x > g_system_config.vibration_max_freq_hz) {
+            analysis.vibration_freq_x = 0.0f;
+        }
+    } else {
+        analysis.fft_peak_freq_x = 0.0f;
+        analysis.fft_power_x = 0.0f;
+        analysis.vibration_freq_x = 0.0f;
+    }
+
+    if (valid_y) {
+        performFFT(raw_data.accel_y, raw_data.sample_count, analysis.fft_peak_freq_y, analysis.fft_power_y);
+        analysis.vibration_freq_y = calculateZeroCrossFrequency(raw_data.accel_y, raw_data.sample_count, current_rate_hz);
+        if (analysis.vibration_freq_y < g_system_config.vibration_min_freq_hz ||
+            analysis.vibration_freq_y > g_system_config.vibration_max_freq_hz) {
+            analysis.vibration_freq_y = 0.0f;
+        }
+    } else {
+        analysis.fft_peak_freq_y = 0.0f;
+        analysis.fft_power_y = 0.0f;
+        analysis.vibration_freq_y = 0.0f;
+    }
+
+    if (valid_z) {
+        performFFT(raw_data.accel_z, raw_data.sample_count, analysis.fft_peak_freq_z, analysis.fft_power_z);
+        analysis.vibration_freq_z = calculateZeroCrossFrequency(raw_data.accel_z, raw_data.sample_count, current_rate_hz);
+        if (analysis.vibration_freq_z < g_system_config.vibration_min_freq_hz ||
+            analysis.vibration_freq_z > g_system_config.vibration_max_freq_hz) {
+            analysis.vibration_freq_z = 0.0f;
+        }
+    } else {
+        analysis.fft_peak_freq_z = 0.0f;
+        analysis.fft_power_z = 0.0f;
+        analysis.vibration_freq_z = 0.0f;
+    }
+
+    // Build display spectrum only for valid signals
+    if (valid_x) {
+        buildDisplaySpectrum(raw_data.accel_x, raw_data.sample_count, spectrum_x);
+    } else {
+        for (uint16_t i = 0; i < FFT_DISPLAY_POINTS; ++i) {
+            spectrum_x[i] = 0.0f;
+        }
+    }
+
+    if (valid_y) {
+        buildDisplaySpectrum(raw_data.accel_y, raw_data.sample_count, spectrum_y);
+    } else {
+        for (uint16_t i = 0; i < FFT_DISPLAY_POINTS; ++i) {
+            spectrum_y[i] = 0.0f;
+        }
+    }
+
+    if (valid_z) {
+        buildDisplaySpectrum(raw_data.accel_z, raw_data.sample_count, spectrum_z);
+    } else {
+        for (uint16_t i = 0; i < FFT_DISPLAY_POINTS; ++i) {
+            spectrum_z[i] = 0.0f;
+        }
+    }
+
+    // Calculate pitch and roll (always available from accelerometer)
     calculatePitchRoll(raw_data, analysis.pitch, analysis.roll);
     analysis.temperature = 0.0f;
+
+    if (g_debug_mode) {
+        DEBUG_PRINT("Vibration analysis: X(valid=%s freq=%.1fHz vel=%.3fmm/s) Y(valid=%s freq=%.1fHz vel=%.3fmm/s) Z(valid=%s freq=%.1fHz vel=%.3fmm/s)",
+                   valid_x ? "YES" : "NO", analysis.vibration_freq_x, analysis.rms_velocity_x,
+                   valid_y ? "YES" : "NO", analysis.vibration_freq_y, analysis.rms_velocity_y,
+                   valid_z ? "YES" : "NO", analysis.vibration_freq_z, analysis.rms_velocity_z);
+    }
 
     return true;
 }
@@ -375,17 +502,36 @@ void MEMSSensor::performFFT(const float* acceleration_data, uint32_t count, floa
     FFT.Compute(FFT_FORWARD);
     FFT.ComplexToMagnitude();
 
+    // Find maximum magnitude and validate against noise floor
     double max_magnitude = 0.0;
     uint16_t peak_index = 1;
+    double noise_floor_magnitude = pow(10.0, g_system_config.vibration_noise_floor_db / 20.0);
+
     for (uint16_t i = 1; i < FFT_SIZE / 2; ++i) {
-        if (vReal[i] > max_magnitude) {
+        if (vReal[i] > max_magnitude && vReal[i] > noise_floor_magnitude) {
             max_magnitude = vReal[i];
             peak_index = i;
         }
     }
 
-    peak_frequency = static_cast<float>((peak_index * current_rate_hz) / static_cast<double>(FFT_SIZE));
-    power = static_cast<float>(20.0 * log10(max_magnitude + 1e-12));
+    // Validate peak frequency is within acceptable range
+    float calculated_freq = static_cast<float>((peak_index * current_rate_hz) / static_cast<double>(FFT_SIZE));
+    if (calculated_freq >= g_system_config.vibration_min_freq_hz &&
+        calculated_freq <= g_system_config.vibration_max_freq_hz &&
+        max_magnitude > noise_floor_magnitude) {
+        peak_frequency = calculated_freq;
+        power = static_cast<float>(20.0 * log10(max_magnitude + 1e-12));
+    } else {
+        // No valid peak found
+        peak_frequency = 0.0f;
+        power = static_cast<float>(20.0 * log10(noise_floor_magnitude + 1e-12));
+    }
+
+    if (g_debug_mode) {
+        DEBUG_PRINT("FFT: peak_freq=%.1fHz power=%.1fdB noise_floor=%.1fdB valid=%s",
+                   peak_frequency, power, g_system_config.vibration_noise_floor_db,
+                   (peak_frequency > 0.0f) ? "YES" : "NO");
+    }
 }
 
 void MEMSSensor::buildDisplaySpectrum(const float* acceleration_data, uint32_t count, float* spectrum_amplitude_mm_s) {

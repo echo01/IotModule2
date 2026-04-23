@@ -148,10 +148,21 @@ struct SystemConfig {
     uint16_t adxl345_int_threshold_mg;
     bool adxl345_int_enabled;
     
+    // Vibration signal validation
+    float vibration_min_rms_g;
+    float vibration_min_peak_g;
+    float vibration_noise_floor_db;
+    float vibration_deadband_g;
+    float vibration_min_freq_hz;
+    float vibration_max_freq_hz;
+    
     // Power
     bool sleep_enabled;
     uint32_t sleep_interval_sec;
 };
+
+/* ========== GLOBAL SYSTEM CONFIG ========== */
+extern SystemConfig g_system_config;
 
 /* MQTT Payload */
 struct MQTTPayload {
