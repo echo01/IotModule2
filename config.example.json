@@ -1,0 +1,31 @@
+{
+  "wifi": {
+    "ssid": "YourWiFiSSID",
+    "password": "YourWiFiPassword",
+    "ap_enabled": true,
+    "ap_ssid": "VIOT_Config"
+  },
+  "mqtt": {
+    "broker": "broker.hivemq.com",
+    "port": 1883,
+    "client_id": "ESP32_VIOT_001",
+    "username": "",
+    "password": "",
+    "topic_publish": "viot/vibration",
+    "topic_subscribe": "viot/config",
+    "publish_interval_sec": 60,
+    "use_tls": false,
+    "aws_iot_enabled": false
+  },
+  "adxl345": {
+    "rate_hz": 1600,
+    "range_g": 16,
+    "offset_x": 0.0,
+    "offset_y": 0.0,
+    "offset_z": 0.0
+  },
+  "power": {
+    "sleep_enabled": true,
+    "sleep_interval_sec": 3600
+  }
+}
