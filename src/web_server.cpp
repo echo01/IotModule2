@@ -144,6 +144,7 @@ bool WebServer::begin(uint16_t port) {
     server.on("/api/config", HTTP_POST, [this](AsyncWebServerRequest* request) { handleSetConfig(request); });
     server.on("/api/mqtt_config", HTTP_POST, [this](AsyncWebServerRequest* request) { handleSetMQTTConfig(request); });
     server.on("/api/network_config", HTTP_POST, [this](AsyncWebServerRequest* request) { handleSetNetworkConfig(request); });
+    server.on("/api/scan_ssid", HTTP_GET, [this](AsyncWebServerRequest* request) { handleScanSSID(request); });
     server.on("/api/mems_config", HTTP_POST, [this](AsyncWebServerRequest* request) { handleSetMEMSConfig(request); });
     server.on("/api/ap_config", HTTP_POST, [this](AsyncWebServerRequest* request) { handleSetAPConfig(request); });
     server.on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* request) { handleGetStatus(request); });
@@ -316,6 +317,7 @@ void WebServer::handleGetConfig(AsyncWebServerRequest* request) {
     doc["adxl345"]["offset_z"] = g_system_config.adxl345_offset_z;
     doc["adxl345"]["int_threshold_mg"] = g_system_config.adxl345_int_threshold_mg;
     doc["adxl345"]["int_enabled"] = g_system_config.adxl345_int_enabled;
+    doc["adxl345"]["int_pin"] = g_system_config.adxl345_int_pin;
     
     doc["vibration"]["min_rms_g"] = g_system_config.vibration_min_rms_g;
     doc["vibration"]["min_peak_g"] = g_system_config.vibration_min_peak_g;
@@ -325,6 +327,7 @@ void WebServer::handleGetConfig(AsyncWebServerRequest* request) {
     doc["vibration"]["max_freq_hz"] = g_system_config.vibration_max_freq_hz;
     
     doc["power"]["sleep_enabled"] = g_system_config.sleep_enabled;
+    doc["power"]["sleep_interval_sec"] = g_system_config.sleep_interval_sec;
 
     String json;
     serializeJson(doc, json);
@@ -460,6 +463,36 @@ void WebServer::handleSetNetworkConfig(AsyncWebServerRequest* request) {
     request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Network config applied.\"}");
 }
 
+void WebServer::handleScanSSID(AsyncWebServerRequest* request) {
+    int networks = WiFi.scanNetworks(false, true);
+    if (networks < 0) {
+        request->send(500, "application/json", "{\"error\":\"scan failed\"}");
+        return;
+    }
+
+    DynamicJsonDocument doc(8192);
+    JsonArray arr = doc.createNestedArray("networks");
+
+    for (int i = 0; i < networks; ++i) {
+        String ssid = WiFi.SSID(i);
+        if (ssid.length() == 0) {
+            continue;
+        }
+
+        JsonObject n = arr.createNestedObject();
+        n["ssid"] = ssid;
+        n["rssi"] = WiFi.RSSI(i);
+        n["channel"] = WiFi.channel(i);
+        n["secure"] = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+    }
+
+    WiFi.scanDelete();
+
+    String json;
+    serializeJson(doc, json);
+    request->send(200, "application/json", json);
+}
+
 void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     uint16_t rate_hz = request->hasParam("rate_hz", true) ? static_cast<uint16_t>(request->getParam("rate_hz", true)->value().toInt()) : g_system_config.adxl345_rate_hz;
     uint8_t range_g = request->hasParam("range_g", true) ? static_cast<uint8_t>(request->getParam("range_g", true)->value().toInt()) : g_system_config.adxl345_range_g;
@@ -468,6 +501,9 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     float offset_z = request->hasParam("offset_z", true) ? request->getParam("offset_z", true)->value().toFloat() : g_system_config.adxl345_offset_z;
     uint16_t int_threshold_mg = request->hasParam("int_threshold_mg", true) ? static_cast<uint16_t>(request->getParam("int_threshold_mg", true)->value().toInt()) : g_system_config.adxl345_int_threshold_mg;
     bool int_enabled = !request->hasParam("int_enabled", true) || request->getParam("int_enabled", true)->value() == "1";
+    uint8_t int_pin = request->hasParam("int_pin", true)
+        ? static_cast<uint8_t>(request->getParam("int_pin", true)->value().toInt())
+        : g_system_config.adxl345_int_pin;
     
     // Vibration parameters
     float min_rms_g = request->hasParam("min_rms_g", true) ? request->getParam("min_rms_g", true)->value().toFloat() : g_system_config.vibration_min_rms_g;
@@ -476,6 +512,15 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     float deadband_g = request->hasParam("deadband_g", true) ? request->getParam("deadband_g", true)->value().toFloat() : g_system_config.vibration_deadband_g;
     float min_freq_hz = request->hasParam("min_freq_hz", true) ? request->getParam("min_freq_hz", true)->value().toFloat() : g_system_config.vibration_min_freq_hz;
     float max_freq_hz = request->hasParam("max_freq_hz", true) ? request->getParam("max_freq_hz", true)->value().toFloat() : g_system_config.vibration_max_freq_hz;
+    uint32_t sleep_interval_sec = request->hasParam("sleep_interval_sec", true)
+        ? static_cast<uint32_t>(request->getParam("sleep_interval_sec", true)->value().toInt())
+        : g_system_config.sleep_interval_sec;
+
+    if (sleep_interval_sec < 60) {
+        sleep_interval_sec = 60;
+    } else if (sleep_interval_sec > 86400) {
+        sleep_interval_sec = 86400;
+    }
 
     g_system_config.adxl345_rate_hz = rate_hz;
     g_system_config.adxl345_range_g = range_g;
@@ -484,6 +529,7 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     g_system_config.adxl345_offset_z = offset_z;
     g_system_config.adxl345_int_threshold_mg = int_threshold_mg;
     g_system_config.adxl345_int_enabled = int_enabled;
+    g_system_config.adxl345_int_pin = (int_pin == 2) ? 2 : 1;
     
     g_system_config.vibration_min_rms_g = min_rms_g;
     g_system_config.vibration_min_peak_g = min_peak_g;
@@ -491,6 +537,7 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     g_system_config.vibration_deadband_g = deadband_g;
     g_system_config.vibration_min_freq_hz = min_freq_hz;
     g_system_config.vibration_max_freq_hz = max_freq_hz;
+    g_system_config.sleep_interval_sec = sleep_interval_sec;
 
     if (!g_storage.saveConfig(g_system_config)) {
         request->send(500, "application/json", "{\"error\":\"save failed\"}");
@@ -501,10 +548,11 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     g_mems_sensor.setRange(range_g);
     g_mems_sensor.setOffset(offset_x, offset_y, offset_z);
     g_mems_sensor.setInterruptThreshold(int_threshold_mg);
+    uint8_t gpio_int_pin = (g_system_config.adxl345_int_pin == 2) ? GPIO_ADXL345_INT2 : GPIO_ADXL345_INT1;
     if (int_enabled) {
-        g_mems_sensor.setupInterrupt(GPIO_ADXL345_INT1, true);
+        g_mems_sensor.setupInterrupt(gpio_int_pin, true);
     } else {
-        g_mems_sensor.setupInterrupt(GPIO_ADXL345_INT1, false);
+        g_mems_sensor.setupInterrupt(gpio_int_pin, false);
     }
 
     request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"MEMS config applied.\"}");

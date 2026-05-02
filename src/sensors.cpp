@@ -1,6 +1,8 @@
 #include "sensors.h"
 #include <math.h>
 #include "arduinoFFT.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 namespace {
 constexpr uint8_t REG_DEVID = 0x00;
@@ -14,29 +16,60 @@ constexpr uint8_t REG_INT_MAP = 0x2F;
 constexpr uint8_t REG_INT_ENABLE = 0x2E;
 constexpr uint8_t REG_INT_SOURCE = 0x30;
 constexpr uint8_t DEVID_ADXL345 = 0xE5;
+SemaphoreHandle_t g_i2c_mutex = nullptr;
+
+bool lockI2CBus() {
+    if (g_i2c_mutex == nullptr) {
+        g_i2c_mutex = xSemaphoreCreateMutex();
+        if (g_i2c_mutex == nullptr) {
+            return false;
+        }
+    }
+    return xSemaphoreTake(g_i2c_mutex, pdMS_TO_TICKS(50)) == pdTRUE;
+}
+
+void unlockI2CBus() {
+    if (g_i2c_mutex != nullptr) {
+        xSemaphoreGive(g_i2c_mutex);
+    }
+}
 
 bool writeRegister(uint8_t reg, uint8_t value) {
+    if (!lockI2CBus()) {
+        return false;
+    }
+
     Wire.beginTransmission(ADXL345_I2C_ADDRESS);
     Wire.write(reg);
     Wire.write(value);
-    return Wire.endTransmission() == 0;
+    bool ok = (Wire.endTransmission() == 0);
+
+    unlockI2CBus();
+    return ok;
 }
 
 bool readRegisters(uint8_t reg, uint8_t* buffer, size_t len) {
+    if (!lockI2CBus()) {
+        return false;
+    }
+
     Wire.beginTransmission(ADXL345_I2C_ADDRESS);
     Wire.write(reg);
     if (Wire.endTransmission(false) != 0) {
+        unlockI2CBus();
         return false;
     }
 
     size_t received = Wire.requestFrom(static_cast<int>(ADXL345_I2C_ADDRESS), static_cast<int>(len), static_cast<int>(true));
     if (received != len) {
+        unlockI2CBus();
         return false;
     }
 
     for (size_t i = 0; i < len; ++i) {
         buffer[i] = Wire.read();
     }
+    unlockI2CBus();
     return true;
 }
 } // end anonymous namespace
@@ -183,6 +216,13 @@ bool MEMSSensor::begin() {
 
     INFO_PRINT("ADXL345 initialized successfully");
     return true;
+}
+uint8_t MEMSSensor::readRegister(uint8_t reg,uint8_t *value) {
+    //uint8_t value = 0;
+    if (readRegisters(reg, value, 1)) {
+        return 1;
+    }
+    return 0;
 }
 
 bool MEMSSensor::readRawData(MEMSData& data) {
@@ -426,7 +466,7 @@ uint8_t MEMSSensor::getRange() const {
 
 bool MEMSSensor::setupInterrupt(uint8_t int_pin, bool activity) {
     // Enable activity detection on XYZ axes.
-    writeRegister(REG_ACT_INACT_CTL, 0x70);
+    writeRegister(REG_ACT_INACT_CTL, 0xF0);
     setInterruptThreshold(interrupt_threshold_mg);
 
     if (!activity) {
@@ -435,10 +475,27 @@ bool MEMSSensor::setupInterrupt(uint8_t int_pin, bool activity) {
 
     // Route ACTIVITY interrupt to selected pin (INT1/INT2).
     uint8_t int_map = (int_pin == GPIO_ADXL345_INT2) ? 0x10 : 0x00;
+    INFO_PRINT("ADXL345 interrupt mapped to %02X", int_map);
     if (!writeRegister(REG_INT_MAP, int_map)) {
         return false;
     }
-    return writeRegister(REG_INT_ENABLE, 0x10);
+    if (!writeRegister(REG_INT_ENABLE, 0x10)) {
+        return false;
+    }
+
+    // Read INT_SOURCE once to clear any latched/pending interrupt state.
+    return clearInterruptSource();
+}
+
+bool MEMSSensor::clearInterruptSource(uint8_t* int_source) {
+    uint8_t source = 0;
+    if (!readRegisters(REG_INT_SOURCE, &source, 1)) {
+        return false;
+    }
+    if (int_source != nullptr) {
+        *int_source = source;
+    }
+    return true;
 }
 
 bool MEMSSensor::dataAvailable() {

@@ -37,6 +37,7 @@ private:
     void handleSetConfig(AsyncWebServerRequest* request);
     void handleSetMQTTConfig(AsyncWebServerRequest* request);
     void handleSetNetworkConfig(AsyncWebServerRequest* request);
+    void handleScanSSID(AsyncWebServerRequest* request);
     void handleSetMEMSConfig(AsyncWebServerRequest* request);
     void handleGetStatus(AsyncWebServerRequest* request);
     void handleGetFFTSpectrum(AsyncWebServerRequest* request);

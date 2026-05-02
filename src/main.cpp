@@ -298,8 +298,8 @@ void setup() {
     pinMode(GPIO_MODE_SWITCH, INPUT_PULLUP);
     pinMode(GPIO_LED_STATUS, OUTPUT);
     pinMode(GPIO_MQTT_STATUS, OUTPUT);
-    pinMode(GPIO_ADXL345_INT1, INPUT);
-    pinMode(GPIO_ADXL345_INT2, INPUT);
+    pinMode(GPIO_ADXL345_INT1, INPUT_PULLDOWN);
+    pinMode(GPIO_ADXL345_INT2, INPUT_PULLDOWN);
     digitalWrite(GPIO_LED_STATUS, HIGH);   // Light LED on wakeup
     digitalWrite(GPIO_MQTT_STATUS, LOW);
     
@@ -350,7 +350,14 @@ void setup() {
                                 g_system_config.adxl345_offset_z);
         g_mems_sensor.setInterruptThreshold(g_system_config.adxl345_int_threshold_mg);
         if (g_system_config.adxl345_int_enabled) {
-            g_mems_sensor.setupInterrupt(GPIO_ADXL345_INT1, true);
+            uint8_t gpio_int_pin = (g_system_config.adxl345_int_pin == 2) ? GPIO_ADXL345_INT2 : GPIO_ADXL345_INT1;
+            g_mems_sensor.setupInterrupt(gpio_int_pin, true);
+            uint8_t int_source = 0;
+            if (g_mems_sensor.clearInterruptSource(&int_source)) {
+                INFO_PRINT("Cleared ADXL345 INT_SOURCE after wake: 0x%02X", int_source);
+            } else {
+                ERROR_PRINT("Failed to clear ADXL345 INT_SOURCE after wake");
+            }
         }
     }
     
@@ -485,6 +492,8 @@ void loop() {
     // Read GPIO mode switch
     static uint32_t last_mode_check = 0;
     static uint32_t last_sent_count = 0;
+    static int last_int1_level = LOW;
+    static int last_int2_level = LOW;
     uint32_t now = millis();
     
     // Check mode switch periodically (every 5 seconds)
@@ -521,9 +530,29 @@ void loop() {
         if (g_system_status.data_sent_count > last_sent_count) {
             last_sent_count = g_system_status.data_sent_count;
             INFO_PRINT("Publish completed, arming deep sleep with ADXL345 wake interrupt");
+            if (g_system_config.adxl345_int_enabled) {
+                uint8_t int_source = 0;
+                if (g_mems_sensor.clearInterruptSource(&int_source)) {
+                    INFO_PRINT("Cleared ADXL345 INT_SOURCE before sleep: 0x%02X", int_source);
+                } else {
+                    ERROR_PRINT("Failed to clear ADXL345 INT_SOURCE before sleep");
+                }
+            }
             g_power_manager.enterDeepSleep(g_system_config.sleep_interval_sec);
         }
     }
+
+    // While awake, monitor ADXL345 interrupt lines that are used by ESP_EXT1 wake source.
+    int int1_level = digitalRead(GPIO_ADXL345_INT1);
+    int int2_level = digitalRead(GPIO_ADXL345_INT2);
+    if (int1_level == HIGH && last_int1_level == LOW) {
+        INFO_PRINT("ESP_EXT1 event while awake: ADXL345 INT1 asserted HIGH");
+    }
+    if (int2_level == HIGH && last_int2_level == LOW) {
+        INFO_PRINT("ESP_EXT1 event while awake: ADXL345 INT2 asserted HIGH");
+    }
+    last_int1_level = int1_level;
+    last_int2_level = int2_level;
     
     delay(100);  // Yield to other tasks
 }

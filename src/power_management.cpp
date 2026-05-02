@@ -8,9 +8,14 @@ PowerManager::PowerManager()
 bool PowerManager::begin() {
     INFO_PRINT("Power Manager initializing...");
     
-    // Configure GPIOs for wakeup (external interrupts INT1=IO12, INT2=IO14)
+    // EXT1: ADXL345 interrupt lines only.
     uint64_t wake_mask = (1ULL << GPIO_ADXL345_INT1) | (1ULL << GPIO_ADXL345_INT2);
     esp_sleep_enable_ext1_wakeup(wake_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
+    INFO_PRINT("EXT1 wake configured: ADXL345 INT1/INT2 (ANY HIGH)");
+
+    // EXT0: MODE_SWITCH only (HIGH = debug request while sleeping).
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)GPIO_MODE_SWITCH, 1);
+    INFO_PRINT("EXT0 wake configured: MODE_SWITCH (HIGH)");
     
     // Configure timer wakeup
     configureTimerWakeup(DEEP_SLEEP_INTERVAL_SEC);
