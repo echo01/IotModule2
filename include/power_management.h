@@ -20,6 +20,9 @@ public:
     
     // Configure external interrupt wakeup
     void configureExtIntWakeup(uint8_t pin, bool active_high = true);
+
+    // Configure mode switch as a debug wake source
+    void configureModeSwitchWakeup();
     
     // Get wakeup reason
     WakeupReason getWakeupReason();

@@ -33,6 +33,7 @@ public:
     
     // Interrupt setup
     bool setupInterrupt(uint8_t int_pin, bool activity);
+    bool clearInterruptSource(uint8_t* source = nullptr);
     
     // Check if data is available
     bool dataAvailable();

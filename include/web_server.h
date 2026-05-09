@@ -2,6 +2,7 @@
 #define WEB_SERVER_H
 
 #include <ESPAsyncWebServer.h>
+#include <freertos/semphr.h>
 #include "config.h"
 #include "common.h"
 
@@ -30,6 +31,11 @@ private:
     AsyncWebServer server;
     AsyncWebSocket ws;
     bool is_running;
+    uint32_t last_ws_cleanup_ms;
+    SemaphoreHandle_t dashboard_mutex;
+    VibrationAnalysis latest_analysis;
+    SystemStatus latest_status;
+    bool has_latest_analysis;
     
     // Handler functions
     void handleRoot(AsyncWebServerRequest* request);
@@ -37,10 +43,14 @@ private:
     void handleSetConfig(AsyncWebServerRequest* request);
     void handleSetMQTTConfig(AsyncWebServerRequest* request);
     void handleSetNetworkConfig(AsyncWebServerRequest* request);
+    void handleScanSSID(AsyncWebServerRequest* request);
     void handleSetMEMSConfig(AsyncWebServerRequest* request);
+    void handleSetSystemConfig(AsyncWebServerRequest* request);
     void handleGetStatus(AsyncWebServerRequest* request);
+    void handleGetDashboard(AsyncWebServerRequest* request);
     void handleGetFFTSpectrum(AsyncWebServerRequest* request);
-    void handleGetLastMQTTPayload(AsyncWebServerRequest* request);
+    void handleGetFFTSpectrumCSV(AsyncWebServerRequest* request);
+    void handleGetMQTTPublishSummary(AsyncWebServerRequest* request);
     void handleWiFiConfigPage(AsyncWebServerRequest* request);
     void handleAPConfigPage(AsyncWebServerRequest* request);
     void handleFactoryResetPage(AsyncWebServerRequest* request);
@@ -59,6 +69,13 @@ private:
     String renderWiFiConfigPage() const;
     String renderAPConfigPage() const;
     String renderFactoryResetPage() const;
+    String renderFFTSpectrumPage() const;
+    String renderMQTTLogPage() const;
+    
+    void handleFFTSpectrumPage(AsyncWebServerRequest* request);
+    void handleMQTTLogPage(AsyncWebServerRequest* request);
+    void cleanupWebSocketClientsIfNeeded();
+    void cacheDashboardSnapshot(const VibrationAnalysis& analysis, const SystemStatus& status);
 };
 
 // Task function

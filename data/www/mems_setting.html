@@ -22,6 +22,7 @@
     <div><strong>MEMS Sensor Config</strong></div>
     <div class="nav">
       <a href="/index.html">Dashboard</a>
+      <a href="/fft_chart.html">FFT Chart</a>
       <a href="/mqtt_setting.html">MQTT Config</a>
       <a href="/network_setting.html">Network Config</a>
       <a href="/mems_setting.html">MEMS Config</a>
@@ -31,7 +32,12 @@
 
   <div class="wrap"><div class="card">
     <form id="f">
-      <label>Sampling Rate (Hz)</label><input type="number" name="rate_hz" min="6" max="3200">
+      <label>Sample Output Rate (Hz)</label>
+      <select name="rate_hz">
+        <option value="1600">1600 Hz</option>
+        <option value="800">800 Hz</option>
+        <option value="400">400 Hz</option>
+      </select>
       <label>Range (G)</label>
       <select name="range_g"><option value="2">2G</option><option value="4">4G</option><option value="8">8G</option><option value="16">16G</option></select>
 
@@ -43,7 +49,10 @@
       </div>
 
       <label>Interrupt Threshold (mg)</label><input type="number" name="int_threshold_mg" min="1" max="16000">
-      <label><input type="checkbox" id="int_enabled" checked> Enable ADXL345 Interrupt (INT1=IO25, INT2=IO26)</label>
+      <label>Enable ADXL345 Interrupt <input type="checkbox" id="int_enabled" checked></label>
+
+      <label>Wakeup Timer (seconds)</label>
+      <input type="number" name="sleep_interval_sec" min="60" max="86400">
       <button type="submit">Save MEMS Config</button>
     </form>
     <div class="msg" id="msg"></div>
@@ -58,6 +67,7 @@ fetch('/api/config').then(r=>r.json()).then(c=>{
   setv('offset_y', c.adxl345?.offset_y || 0);
   setv('offset_z', c.adxl345?.offset_z || 0);
   setv('int_threshold_mg', c.adxl345?.int_threshold_mg || 250);
+  setv('sleep_interval_sec', c.power?.sleep_interval_sec || 3600);
   document.getElementById('int_enabled').checked = c.adxl345?.int_enabled !== false;
 }).catch(()=>{});
 

@@ -50,7 +50,7 @@ private:
     bool json_error_occurred;
     
     // Helper for JSON serialization
-    DynamicJsonDocument config_to_json(const SystemConfig& config);
+    void config_to_json(const SystemConfig& config, JsonDocument& doc);
     SystemConfig json_to_config(const JsonDocument& doc);
 };
 

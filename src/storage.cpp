@@ -22,15 +22,16 @@ bool Storage::loadConfig(SystemConfig& config) {
         config = createDefaultConfig();
         return true;
     }
-    
-    String content;
-    if (!readFile(CONFIG_FILE_PATH, content)) {
-        ERROR_PRINT("Failed to read config file");
+
+    File file = SPIFFS.open(CONFIG_FILE_PATH, "r");
+    if (!file) {
+        ERROR_PRINT("Failed to open config file");
         return false;
     }
-    
-    DynamicJsonDocument doc(4096);
-    DeserializationError error = deserializeJson(doc, content);
+
+    StaticJsonDocument<4096> doc;
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
     
     if (error) {
         ERROR_PRINT("JSON parse error: %s", error.c_str());
@@ -45,12 +46,18 @@ bool Storage::loadConfig(SystemConfig& config) {
 }
 
 bool Storage::saveConfig(const SystemConfig& config) {
-    DynamicJsonDocument doc = config_to_json(config);
-    
-    String json_str;
-    serializeJson(doc, json_str);
-    
-    if (writeFile(CONFIG_FILE_PATH, json_str)) {
+    File file = SPIFFS.open(CONFIG_FILE_PATH, "w");
+    if (!file) {
+        ERROR_PRINT("Failed to open file for writing: %s", CONFIG_FILE_PATH);
+        return false;
+    }
+
+    StaticJsonDocument<4096> doc;
+    config_to_json(config, doc);
+    size_t written = serializeJson(doc, file);
+    file.close();
+
+    if (written > 0) {
         INFO_PRINT("Configuration saved to %s", CONFIG_FILE_PATH);
         return true;
     }
@@ -178,13 +185,12 @@ SystemConfig Storage::createDefaultConfig() {
     // Power defaults
     config.sleep_enabled = true;
     config.sleep_interval_sec = DEEP_SLEEP_INTERVAL_SEC;
+    config.log_enabled = true;
     
     return config;
 }
 
-DynamicJsonDocument Storage::config_to_json(const SystemConfig& config) {
-    DynamicJsonDocument doc(4096);
-    
+void Storage::config_to_json(const SystemConfig& config, JsonDocument& doc) {
     doc["wifi"]["ssid"] = config.wifi_ssid;
     doc["wifi"]["password"] = config.wifi_password;
     doc["wifi"]["ap_enabled"] = config.wifi_ap_enabled;
@@ -228,8 +234,7 @@ DynamicJsonDocument Storage::config_to_json(const SystemConfig& config) {
     
     doc["power"]["sleep_enabled"] = config.sleep_enabled;
     doc["power"]["sleep_interval_sec"] = config.sleep_interval_sec;
-    
-    return doc;
+    doc["power"]["log_enabled"] = config.log_enabled;
 }
 
 SystemConfig Storage::json_to_config(const JsonDocument& doc) {
@@ -292,6 +297,13 @@ SystemConfig Storage::json_to_config(const JsonDocument& doc) {
     config.mqtt_aws_iot_enabled = doc["mqtt"]["aws_iot_enabled"] | false;
     
     config.adxl345_rate_hz = doc["adxl345"]["rate_hz"] | 1600;
+    if (config.adxl345_rate_hz <= 400) {
+        config.adxl345_rate_hz = 400;
+    } else if (config.adxl345_rate_hz <= 800) {
+        config.adxl345_rate_hz = 800;
+    } else {
+        config.adxl345_rate_hz = 1600;
+    }
     config.adxl345_range_g = doc["adxl345"]["range_g"] | 16;
     config.adxl345_offset_x = doc["adxl345"]["offset_x"] | 0.0f;
     config.adxl345_offset_y = doc["adxl345"]["offset_y"] | 0.0f;
@@ -308,6 +320,7 @@ SystemConfig Storage::json_to_config(const JsonDocument& doc) {
     
     config.sleep_enabled = doc["power"]["sleep_enabled"] | true;
     config.sleep_interval_sec = doc["power"]["sleep_interval_sec"] | DEEP_SLEEP_INTERVAL_SEC;
+    config.log_enabled = doc["power"]["log_enabled"] | true;
     
     return config;
 }

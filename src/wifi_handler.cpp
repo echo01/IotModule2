@@ -1,4 +1,5 @@
 #include "wifi_handler.h"
+#include <esp_heap_caps.h>
 
 WiFiHandler::WiFiHandler()
     : current_status(WIFI_INIT),
@@ -24,18 +25,16 @@ bool WiFiHandler::begin(const SystemConfig& cfg) {
     INFO_PRINT("WiFi Handler initializing...");
 
     WiFi.persistent(false);
-    WiFi.setSleep(WIFI_PS_MIN_MODEM);
+    // WiFi.setSleep(WIFI_PS_MIN_MODEM);
+    WiFi.setSleep(WIFI_PS_NONE);
     WiFi.setAutoReconnect(false);
-    WiFi.mode(config.wifi_ap_enabled ? WIFI_AP_STA : WIFI_STA);
-
-    if (config.wifi_ap_enabled) {
-        ensureAPRunning();
-    }
+    WiFi.mode(WIFI_STA);
+    ensureAPRunning();
 
     if (shouldAttemptSTA()) {
         requestReconnect();
     } else {
-        setStatus(AP_ONLY);
+        setStatus(shouldRunAPMode() ? AP_ONLY : WIFI_INIT);
     }
 
     return true;
@@ -93,14 +92,7 @@ void WiFiHandler::requestReconnect() {
 
 bool WiFiHandler::applyConfig(const SystemConfig& new_config, bool reconnect_sta) {
     config = new_config;
-    if (config.wifi_ap_enabled) {
-        if (!startAPMode(config.ap_ssid, config.ap_password)) {
-            return false;
-        }
-    } else {
-        WiFi.softAPdisconnect(true);
-        ap_started = false;
-    }
+    ensureAPRunning();
 
     if (reconnect_sta) {
         WiFi.disconnect(false, true);
@@ -108,7 +100,7 @@ bool WiFiHandler::applyConfig(const SystemConfig& new_config, bool reconnect_sta
     } else if (!shouldAttemptSTA()) {
         WiFi.disconnect(false, true);
         sta_attempt_requested = false;
-        setStatus(AP_ONLY);
+        setStatus(shouldRunAPMode() ? AP_ONLY : WIFI_INIT);
     }
 
     return true;
@@ -230,7 +222,8 @@ void WiFiHandler::beginSTAConnectAttempt(uint32_t now) {
     setStatus(WIFI_CONNECTING);
 
     WiFi.disconnect(false, true);
-    WiFi.mode(WIFI_AP_STA);
+    stopAPMode();
+    WiFi.mode(WIFI_STA);
     applySTAIPConfig();
     WiFi.begin(config.wifi_ssid, config.wifi_password);
 
@@ -288,8 +281,11 @@ void WiFiHandler::handleConnectingState(uint32_t now) {
         sta_attempt_requested = false;
         retry_count = 0;
         setStatus(WIFI_CONNECTED);
+        stopAPMode();
+        WiFi.mode(WIFI_STA);
         INFO_PRINT("WiFi connected: %s", WiFi.localIP().toString().c_str());
-        INFO_PRINT("AP remains active at %s", WiFi.softAPIP().toString().c_str());
+        INFO_PRINT("SoftAP disabled while STA is connected (test mode)");
+        log_heap_state("WIFI_STA_CONNECTED");
         return;
     }
 
@@ -323,25 +319,48 @@ void WiFiHandler::handleFailedState() {
     sta_attempt_requested = false;
     retry_count = WIFI_CONNECT_MAX_RETRIES;
     ERROR_PRINT("WiFi STA connection failed");
-    INFO_PRINT("Switching to AP-only mode");
+    ensureAPRunning();
+    INFO_PRINT("Switching to %s mode",
+               shouldRunAPMode() ? "AP-only (debug fallback)" : "STA-only fallback");
 }
 
 void WiFiHandler::ensureAPRunning() {
-    if (!config.wifi_ap_enabled) {
-        if (ap_started) {
-            WiFi.softAPdisconnect(true);
-            ap_started = false;
-        }
+    if (!shouldRunAPMode()) {
+        stopAPMode();
         if (WiFi.getMode() != WIFI_STA) {
             WiFi.mode(WIFI_STA);
         }
         return;
     }
 
-    if (!ap_started || WiFi.getMode() != WIFI_AP_STA) {
+    if (!ap_started || (WiFi.getMode() != WIFI_AP_STA && WiFi.getMode() != WIFI_AP)) {
         WiFi.mode(WIFI_AP_STA);
         startAPMode(config.ap_ssid, config.ap_password);
     }
+}
+
+void WiFiHandler::stopAPMode() {
+    if (ap_started) {
+        WiFi.softAPdisconnect(true);
+        ap_started = false;
+        INFO_PRINT("SoftAP stopped");
+    }
+}
+
+bool WiFiHandler::shouldRunAPMode() const {
+    if (!config.wifi_ap_enabled) {
+        return false;
+    }
+
+    if (isConnected()) {
+        return false;
+    }
+
+    if (g_debug_mode) {
+        return true;
+    }
+
+    return false;
 }
 
 String WiFiHandler::buildDefaultAPSSID() const {

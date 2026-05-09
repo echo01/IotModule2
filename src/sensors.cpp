@@ -14,6 +14,9 @@ constexpr uint8_t REG_INT_MAP = 0x2F;
 constexpr uint8_t REG_INT_ENABLE = 0x2E;
 constexpr uint8_t REG_INT_SOURCE = 0x30;
 constexpr uint8_t DEVID_ADXL345 = 0xE5;
+constexpr uint8_t DATA_FORMAT_FULL_RES = 0x08;
+constexpr uint8_t DATA_FORMAT_INT_ACTIVE_LOW = 0x20;
+constexpr uint8_t INT_ACTIVITY = 0x10;
 
 bool writeRegister(uint8_t reg, uint8_t value) {
     Wire.beginTransmission(ADXL345_I2C_ADDRESS);
@@ -180,6 +183,7 @@ bool MEMSSensor::begin() {
     setInterruptThreshold(interrupt_threshold_mg);
     // Set MEASURE bit.
     writeRegister(REG_POWER_CTL, 0x08);
+    clearInterruptSource();
 
     INFO_PRINT("ADXL345 initialized successfully");
     return true;
@@ -355,26 +359,12 @@ bool MEMSSensor::setDataRate(uint16_t rate_hz) {
     uint8_t rate_code = 0x0E;  // 1600 Hz
     current_rate_hz = 1600;
 
-    if (rate_hz <= 6) {
-        rate_code = 0x06; current_rate_hz = 6;
-    } else if (rate_hz <= 12) {
-        rate_code = 0x07; current_rate_hz = 12;
-    } else if (rate_hz <= 25) {
-        rate_code = 0x08; current_rate_hz = 25;
-    } else if (rate_hz <= 50) {
-        rate_code = 0x09; current_rate_hz = 50;
-    } else if (rate_hz <= 100) {
-        rate_code = 0x0A; current_rate_hz = 100;
-    } else if (rate_hz <= 200) {
-        rate_code = 0x0B; current_rate_hz = 200;
-    } else if (rate_hz <= 400) {
+    if (rate_hz <= 400) {
         rate_code = 0x0C; current_rate_hz = 400;
     } else if (rate_hz <= 800) {
         rate_code = 0x0D; current_rate_hz = 800;
-    } else if (rate_hz <= 1600) {
-        rate_code = 0x0E; current_rate_hz = 1600;
     } else {
-        rate_code = 0x0F; current_rate_hz = 3200;
+        rate_code = 0x0E; current_rate_hz = 1600;
     }
 
     bool ok = writeRegister(REG_BW_RATE, rate_code);
@@ -396,8 +386,11 @@ bool MEMSSensor::setRange(uint8_t range_g) {
         range_code = 0x03; current_range_g = 16;
     }
 
-    // FULL_RES=1 keeps scale constant across ranges.
-    return writeRegister(REG_DATA_FORMAT, static_cast<uint8_t>(0x08 | range_code));
+    // FULL_RES keeps scale constant; INT_INVERT makes INT1/INT2 active LOW.
+    return writeRegister(REG_DATA_FORMAT,
+                         static_cast<uint8_t>(DATA_FORMAT_FULL_RES |
+                                              DATA_FORMAT_INT_ACTIVE_LOW |
+                                              range_code));
 }
 
 bool MEMSSensor::setOffset(float off_x, float off_y, float off_z) {
@@ -425,20 +418,29 @@ uint8_t MEMSSensor::getRange() const {
 }
 
 bool MEMSSensor::setupInterrupt(uint8_t int_pin, bool activity) {
-    // Enable activity detection on XYZ axes.
-    writeRegister(REG_ACT_INACT_CTL, 0x70);
+    // Enable activity detection on XYZ axes. AC mode=1 (absolute), ACT bits=111 (all axes).
+    writeRegister(REG_ACT_INACT_CTL, 0xF0);   
     setInterruptThreshold(interrupt_threshold_mg);
 
     if (!activity) {
-        return writeRegister(REG_INT_ENABLE, 0x00);
+        bool ok = writeRegister(REG_INT_ENABLE, 0x00);
+        clearInterruptSource();
+        return ok;
     }
 
     // Route ACTIVITY interrupt to selected pin (INT1/INT2).
-    uint8_t int_map = (int_pin == GPIO_ADXL345_INT2) ? 0x10 : 0x00;
+    uint8_t int_map = (int_pin == GPIO_ADXL345_INT2) ? INT_ACTIVITY : 0x00;
     if (!writeRegister(REG_INT_MAP, int_map)) {
         return false;
     }
-    return writeRegister(REG_INT_ENABLE, 0x10);
+    if (!writeRegister(REG_INT_ENABLE, INT_ACTIVITY)) {
+        return false;
+    }
+
+    clearInterruptSource();
+    DEBUG_PRINT("ADXL345 activity interrupt enabled on %s, active LOW",
+                (int_pin == GPIO_ADXL345_INT2) ? "INT2" : "INT1");
+    return true;
 }
 
 bool MEMSSensor::dataAvailable() {
@@ -447,6 +449,20 @@ bool MEMSSensor::dataAvailable() {
         return false;
     }
     return (int_source & 0x80) != 0;
+}
+
+bool MEMSSensor::clearInterruptSource(uint8_t* source) {
+    uint8_t int_source = 0;
+    if (!readRegisters(REG_INT_SOURCE, &int_source, 1)) {
+        return false;
+    }
+
+    if (source != nullptr) {
+        *source = int_source;
+    }
+
+    DEBUG_PRINT("ADXL345 INT_SOURCE read/cleared: 0x%02X", int_source);
+    return true;
 }
 
 bool MEMSSensor::selfTest() {

@@ -9,8 +9,10 @@
     .nav a{color:#c7d2fe;text-decoration:none;margin-right:12px;font-weight:600}
     .wrap{max-width:760px;margin:16px auto;padding:0 12px}
     .card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 8px 18px rgba(0,0,0,.08)}
+    label{display:block;font-weight:600;margin:8px 0 6px}
     button{margin-top:10px;margin-right:8px;padding:10px 14px;border:0;border-radius:8px;color:#fff;font-weight:700;cursor:pointer}
-    .reboot{background:#2563eb}.reset{background:#b91c1c}
+    .save{background:#0f766e}.reboot{background:#2563eb}.reset{background:#b91c1c}
+    .hint{color:#475569;font-size:13px;margin:4px 0 12px}
     .msg{margin-top:12px}
   </style>
 </head>
@@ -19,6 +21,7 @@
     <div><strong>Factory Default & Reboot</strong></div>
     <div class="nav">
       <a href="/index.html">Dashboard</a>
+      <a href="/fft_chart.html">FFT Chart</a>
       <a href="/mqtt_setting.html">MQTT Config</a>
       <a href="/network_setting.html">Network Config</a>
       <a href="/mems_setting.html">MEMS Config</a>
@@ -26,6 +29,14 @@
     </div>
   </div>
   <div class="wrap"><div class="card">
+    <h2>Power Saving Options</h2>
+    <form id="systemForm">
+      <label>Print Log <input type="checkbox" id="log_enabled" checked></label>
+      <div class="hint">Disable Serial logs to reduce UART/CPU activity in normal operation.</div>
+      <button class="save" type="submit">Save System Config</button>
+    </form>
+    <hr>
+    <h2>Device Actions</h2>
     <p>Use these actions carefully. Factory default removes saved config and restarts the device.</p>
     <label><input type="checkbox" id="clear_spiffs"> Also format SPIFFS</label><br>
     <button class="reboot" id="rebootBtn">Reboot Device</button>
@@ -34,6 +45,16 @@
   </div></div>
 <script>
 const msg=document.getElementById('msg');
+fetch('/api/config').then(r=>r.json()).then(c=>{
+  document.getElementById('log_enabled').checked = c.power?.log_enabled !== false;
+}).catch(()=>{});
+document.getElementById('systemForm').onsubmit=async (e)=>{
+  e.preventDefault();
+  const fd=new FormData();
+  fd.append('log_enabled', document.getElementById('log_enabled').checked ? '1' : '0');
+  const r=await fetch('/api/system_config',{method:'POST',body:fd});
+  msg.textContent = r.ok ? 'System config saved.' : `Save failed: ${await r.text()}`;
+};
 document.getElementById('rebootBtn').onclick=async ()=>{
   const r=await fetch('/api/reboot',{method:'POST'}); msg.textContent = r.ok ? 'Rebooting...' : 'Reboot failed';
 };

@@ -18,7 +18,6 @@
     .unit{font-size:14px;color:var(--muted)}
     .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
     canvas{width:100%;height:280px;background:#fff;border:1px solid #cbd5e1;border-radius:8px}
-    textarea{width:100%;height:180px;border:1px solid #cbd5e1;border-radius:8px;padding:10px;font-family:Consolas,monospace}
     .orientation-scene{width:100%;min-height:280px;display:flex;justify-content:center;align-items:center;perspective:900px;padding:16px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px}
     .orientation-cube{position:relative;width:160px;height:160px;transform-style:preserve-3d;transform:rotateX(-20deg) rotateY(20deg);transition:transform 0.2s ease-out;}
     .orientation-cube .face{position:absolute;width:160px;height:160px;display:flex;justify-content:center;align-items:center;font-weight:700;color:#fff;border:2px solid rgba(15,23,42,0.15);backface-visibility:hidden;}
@@ -28,6 +27,10 @@
     .orientation-cube .left{background:rgba(6,182,212,0.9);transform:rotateY(-90deg) translateZ(80px);}
     .orientation-cube .top{background:rgba(16,185,129,0.9);transform:rotateX(90deg) translateZ(80px);}
     .orientation-cube .bottom{background:rgba(34,197,94,0.9);transform:rotateX(-90deg) translateZ(80px);}
+    .summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+    .summary-item{padding:10px 12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px}
+    .summary-key{font-size:12px;color:var(--muted);text-transform:uppercase}
+    .summary-val{font-size:22px;font-weight:700;margin-top:4px}
   </style>
 </head>
 <body>
@@ -35,6 +38,7 @@
     <div><strong>FIoT Dashboard</strong></div>
     <div class="nav">
       <a href="/index.html">Dashboard</a>
+      <a href="/fft_chart.html">FFT Chart</a>
       <a href="/mqtt_setting.html">MQTT Config</a>
       <a href="/network_setting.html">Network Config</a>
       <a href="/mems_setting.html">MEMS Config</a>
@@ -60,6 +64,7 @@
       <div class="card"><div class="label">Roll</div><div class="val" id="roll">0 <span class="unit">°</span></div></div>
       <div class="card"><div class="label">Yaw</div><div class="val" id="yaw">0 <span class="unit">°</span></div></div>
       <div class="card"><div class="label">Battery Voltage</div><div class="val" id="battery_v">0 <span class="unit">V</span></div></div>
+      <div class="card"><div class="label">WiFi RSSI</div><div class="val" id="wifi_rssi">0 <span class="unit">dBm</span></div></div>
     </div>
 
     <div class="card" style="margin-top:12px">
@@ -77,33 +82,28 @@
     </div>
 
     <div class="card" style="margin-top:12px">
-      <div class="row" style="margin-bottom:10px">
-        <strong>FFT Spectrum 10 - 1200 Hz (Amplitude 0 - 30 mm/s)</strong>
-        <label for="axisSelect">Axis:</label>
-        <select id="axisSelect"><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select>
-        <label for="scaleMode">Scale:</label>
-        <select id="scaleMode">
-          <option value="5">0 - 5 mm/s</option>
-          <option value="10">0 - 10 mm/s</option>
-          <option value="15">0 - 15 mm/s</option>
-          <option value="20">0 - 20 mm/s</option>
-          <option value="25">0 - 25 mm/s</option>
-          <option value="30">0 - 30 mm/s</option>
-          <option value="auto" selected>Auto</option>
-        </select>
+      <div class="label">MQTT Publish Summary</div>
+      <div class="summary-grid" style="margin-top:12px">
+        <div class="summary-item"><div class="summary-key">Last Result</div><div class="summary-val" id="pubResult">No data</div></div>
+        <div class="summary-item"><div class="summary-key">Last Sent</div><div class="summary-val" id="pubWhen">-</div></div>
+        <div class="summary-item"><div class="summary-key">Next Send</div><div class="summary-val" id="pubNext">-</div></div>
+        <div class="summary-item"><div class="summary-key">Publish Count</div><div class="summary-val" id="pubCount">0</div></div>
+        <div class="summary-item"><div class="summary-key">TLS Connect</div><div class="summary-val" id="pubTls">Idle</div></div>
+        <div class="summary-item"><div class="summary-key">Subscribe RX</div><div class="summary-val" id="subRx">0</div></div>
+        <div class="summary-item"><div class="summary-key">Last RX</div><div class="summary-val" id="subWhen">-</div></div>
+        <div class="summary-item"><div class="summary-key">Main Payload</div><div class="summary-val" id="pubMain">0 B</div></div>
+        <div class="summary-item"><div class="summary-key">FFT X/Y/Z</div><div class="summary-val" id="pubFft">0 / 0 / 0 B</div></div>
       </div>
-      <canvas id="fftCanvas" width="1100" height="300"></canvas>
-    </div>
-
-    <div class="card" style="margin-top:12px">
-      <div class="label">Last MQTT Payload</div>
-      <textarea id="lastPayload" readonly>{}</textarea>
     </div>
   </div>
 
 <script>
   function fmt(v,d=3){ return Number(v||0).toFixed(d); }
   function setText(id,text){ const el=document.getElementById(id); if(el) el.textContent=text; }
+  let mqttSummaryTimer = null;
+  let dashboardTimer = null;
+  let countdownTimer = null;
+  let nextSendSeconds = null;
 
   function applyData(d){
     if(!d) return;
@@ -124,6 +124,7 @@
     setText('yaw', `${fmt(d.orientation?.yaw,1)} °`);
     updateOrientationCube(d.orientation?.pitch, d.orientation?.roll, d.orientation?.yaw);
     setText('battery_v', `${fmt(d.battery,2)} V`);
+    setText('wifi_rssi', `${Number(d.rssi ?? -100)} dBm`);
   }
 
   function updateOrientationCube(pitch, roll, yaw) {
@@ -135,94 +136,58 @@
     cube.style.transform = `rotateX(${px}deg) rotateY(${ry}deg) rotateZ(${yz}deg)`;
   }
 
-  function drawSpectrum(freq, amp){
-    const canvas=document.getElementById('fftCanvas');
-    const ctx=canvas.getContext('2d');
-    const w=canvas.width,h=canvas.height;
-    ctx.clearRect(0,0,w,h);
-    const padL=50,padR=20,padT=20,padB=28;
-    const x0=padL,y0=h-padB,plotW=w-padL-padR,plotH=h-padT-padB;
-
-    ctx.strokeStyle='#94a3b8'; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(x0,padT); ctx.lineTo(x0,y0); ctx.lineTo(x0+plotW,y0); ctx.stroke();
-
-    const minF=10,maxF=1200,minA=0;
-    const scaleMode = document.getElementById('scaleMode').value;
-    let maxA = 30;
-    if (scaleMode === 'auto' && amp && amp.length > 0) {
-      let maxVal = 0;
-      for (let i = 0; i < amp.length; i++) {
-        const v = Number(amp[i]) || 0;
-        if (v > maxVal) maxVal = v;
-      }
-      maxA = Math.max(1, Math.ceil(maxVal * 1.2));
-    } else if (scaleMode !== 'auto') {
-      const parsed = Number(scaleMode);
-      if (!Number.isNaN(parsed) && parsed > 0) {
-        maxA = parsed;
-      }
-    }
-    const sx=f=>x0+((f-minF)/(maxF-minF))*plotW;
-    const sy=a=>y0-((a-minA)/(maxA-minA))*plotH;
-
-    [10,100,300,600,900,1200].forEach(f=>{const x=sx(f);ctx.strokeStyle='#e2e8f0';ctx.beginPath();ctx.moveTo(x,padT);ctx.lineTo(x,y0);ctx.stroke();ctx.fillStyle='#475569';ctx.fillText(String(f),x-10,h-8);});
-    const yTicks = 6;
-    for (let i = 0; i <= yTicks; i++) {
-      const a = (maxA / yTicks) * i;
-      const y = sy(a);
-      ctx.strokeStyle='#e2e8f0';
-      ctx.beginPath(); ctx.moveTo(x0,y); ctx.lineTo(x0+plotW,y); ctx.stroke();
-      ctx.fillStyle='#475569'; ctx.fillText(a.toFixed(1), 6, y+4);
-    }
-
-    if(!freq || !amp || freq.length===0) return;
-    ctx.strokeStyle='#2563eb'; ctx.lineWidth=2; ctx.beginPath();
-    for(let i=0;i<freq.length;i++){
-      const x=sx(Number(freq[i]));
-      let a=Number(amp[i]); if(a<0)a=0; if(a>maxA)a=maxA;
-      const y=sy(a);
-      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-    }
-    ctx.stroke();
-  }
-
-  async function loadSpectrum(){
-    const axis=document.getElementById('axisSelect').value;
+  async function loadMQTTSummary(){
     try{
-      const r=await fetch(`/api/fft_spectrum?axis=${axis}`);
+      const r=await fetch('/api/mqtt_publish_summary?keep_mqtt=1');
       const d=await r.json();
-      drawSpectrum(d.freq_hz||[], d.amp_mm_s||[]);
+      nextSendSeconds = Number.isFinite(Number(d.seconds_until_next_publish)) ? Number(d.seconds_until_next_publish) : null;
+      setText('pubResult', d.has_publish ? (d.success ? 'Success' : 'Fail') : 'No data');
+      setText('pubWhen', d.last_success_ms ? `${d.seconds_since_last_success} sec ago` : '-');
+      renderNextSend();
+      setText('pubCount', d.publish_count || 0);
+      setText('pubTls', d.tls_connecting ? 'Connecting' : 'Idle');
+      setText('subRx', d.subscribe_receive_count || 0);
+      setText('subWhen', d.last_subscribe_ms ? `${d.seconds_since_last_subscribe} sec ago (${d.last_subscribe_size || 0} B)` : '-');
+      setText('pubMain', `${d.main_size || 0} B`);
+      setText('pubFft', `${d.fft_x_size || 0} / ${d.fft_y_size || 0} / ${d.fft_z_size || 0} B`);
     }catch(_){ }
   }
 
-  async function loadLastPayload(){
-    try{
-      const r=await fetch('/api/last_mqtt_payload');
-      const t=await r.text();
-      document.getElementById('lastPayload').value = t;
-    }catch(_){ }
+  function renderNextSend(){
+    if (nextSendSeconds === null || nextSendSeconds < 0) {
+      setText('pubNext', '-');
+      return;
+    }
+    setText('pubNext', `${Math.max(0, nextSendSeconds)} sec`);
   }
 
-  function pollStatus(){
-    fetch('/api/status').then(r=>r.json()).then(s=>{
-      if(!s) return;
-      setText('battery_v', `${fmt(s.battery_v,2)} V`);
+  function tickNextSend(){
+    if (nextSendSeconds !== null && nextSendSeconds > 0) {
+      nextSendSeconds -= 1;
+      renderNextSend();
+    }
+  }
+
+  function loadDashboard(){
+    fetch('/api/dashboard?keep_mqtt=1').then(r=>r.json()).then(d=>{
+      if(!d || d.has_data === false) return;
+      applyData(d);
     }).catch(()=>{});
   }
 
-  function startWs(){
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${proto}//${location.host}/ws`);
-    ws.onmessage = ev => { try { applyData(JSON.parse(ev.data)); } catch(_){} };
-    ws.onclose = () => setTimeout(startWs, 2000);
+  function stopRealtime(){
+    if (mqttSummaryTimer) { clearInterval(mqttSummaryTimer); mqttSummaryTimer = null; }
+    if (dashboardTimer) { clearInterval(dashboardTimer); dashboardTimer = null; }
+    if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
   }
 
-  document.getElementById('axisSelect').addEventListener('change', loadSpectrum);
-  document.getElementById('scaleMode').addEventListener('change', loadSpectrum);
-  setInterval(loadSpectrum, 4000);
-  setInterval(loadLastPayload, 4000);
-  setInterval(pollStatus, 4000);
-  loadSpectrum(); loadLastPayload(); pollStatus(); startWs();
+  window.addEventListener('beforeunload', stopRealtime);
+  window.addEventListener('pagehide', stopRealtime);
+
+  mqttSummaryTimer = setInterval(loadMQTTSummary, 4000);
+  dashboardTimer = setInterval(loadDashboard, 4000);
+  countdownTimer = setInterval(tickNextSend, 1000);
+  loadMQTTSummary(); loadDashboard();
 </script>
 </body>
 </html>

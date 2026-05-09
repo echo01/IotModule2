@@ -24,7 +24,7 @@
 /* ========== TIMING & POWER ========== */
 #define DEEP_SLEEP_INTERVAL_SEC (60 * 60)  // 1 hour wake timer
 #define MEMS_SAMPLING_RATE      1600       // Hz
-#define MEMS_SAMPLE_COUNT       3200       // 2 seconds of data at 1600 Hz
+#define MEMS_SAMPLE_COUNT       1024       // FFT-sized sampling window to keep MQTTS heap stable
 #define MEMS_STARTUP_DELAY_MS   2000       // Skip first 2 seconds
 
 /* ========== ADXL345 SETTINGS ========== */
@@ -35,10 +35,12 @@
 #define ADXL345_OFFSET_Z        0.0f
 
 /* ========== MQTT SETTINGS ========== */
-#define MQTT_BUFFER_SIZE        4096
+#define MQTT_BUFFER_SIZE        1024
 #define MQTT_MAX_PAYLOAD_SIZE   16384    // For large FFT data
+#define MQTT_FFT_POINTS         32       // Keep each FFT JSON packet below MQTT_BUFFER_SIZE
 #define MQTT_RECONNECT_DELAY_MS 5000
 #define MQTT_PUBLISH_INTERVAL_S 60       // Default 60 sec (configurable 30-3600)
+#define MQTTS_CONNECT_QUIESCE_MS 3500    // Let MEMS release large buffers before TLS handshake
 #ifndef MQTT_SOCKET_TIMEOUT
 #define MQTT_SOCKET_TIMEOUT     10
 #endif
@@ -84,21 +86,21 @@
 #define MEMS_TASK_CORE          0
 
 #define WIFI_TASK_PRIORITY      5
-#define WIFI_TASK_STACK_SIZE    8192
+#define WIFI_TASK_STACK_SIZE    6144
 #define WIFI_TASK_CORE          1
 
 #define MQTT_TASK_PRIORITY      6
-#define MQTT_TASK_STACK_SIZE    8192
+#define MQTT_TASK_STACK_SIZE    6144
 #define MQTT_TASK_CORE          1
 
-#define MQTT_PUBLISH_TASK_STACK_SIZE 6144
+#define MQTT_PUBLISH_TASK_STACK_SIZE 5120
 
 #define WEB_TASK_PRIORITY       4
-#define WEB_TASK_STACK_SIZE     8192
+#define WEB_TASK_STACK_SIZE     6144
 #define WEB_TASK_CORE           1
 
 #define ADC_TASK_PRIORITY       2
-#define ADC_TASK_STACK_SIZE     4096
+#define ADC_TASK_STACK_SIZE     3072
 #define ADC_TASK_CORE           1
 
 #define STACK_LOW_WATERMARK_WORDS 512
@@ -108,8 +110,8 @@
 
 /* ========== QUEUE SIZES ========== */
 #define MEMS_DATA_QUEUE_SIZE    10
-#define MQTT_PAYLOAD_QUEUE_SIZE 5
-#define WEBSOCKET_QUEUE_SIZE    20
+#define MQTT_PAYLOAD_QUEUE_SIZE 1
+#define WEBSOCKET_QUEUE_SIZE    8
 
 /* ========== DEBUG SETTINGS ========== */
 #define DEBUG_MAX_LOG_LINE      256

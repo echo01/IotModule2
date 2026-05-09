@@ -8,20 +8,25 @@
 
 /* ========== GLOBAL DEBUG FLAG ========== */
 extern bool g_debug_mode;
+extern bool g_log_enabled;
 
 /* ========== DEBUG MACROS ========== */
 #define DEBUG_PRINT(fmt, ...) do { \
-    if (g_debug_mode) { \
+    if (g_log_enabled && g_debug_mode) { \
         Serial.printf("[DEBUG] " fmt "\n", ##__VA_ARGS__); \
     } \
 } while(0)
 
 #define ERROR_PRINT(fmt, ...) do { \
-    Serial.printf("[ERROR] " fmt "\n", ##__VA_ARGS__); \
+    if (g_log_enabled) { \
+        Serial.printf("[ERROR] " fmt "\n", ##__VA_ARGS__); \
+    } \
 } while(0)
 
 #define INFO_PRINT(fmt, ...) do { \
-    Serial.printf("[INFO] " fmt "\n", ##__VA_ARGS__); \
+    if (g_log_enabled) { \
+        Serial.printf("[INFO] " fmt "\n", ##__VA_ARGS__); \
+    } \
 } while(0)
 
 /* ========== DATA STRUCTURES ========== */
@@ -165,6 +170,7 @@ struct SystemConfig {
     // Power
     bool sleep_enabled;
     uint32_t sleep_interval_sec;
+    bool log_enabled;
 };
 
 /* ========== GLOBAL SYSTEM CONFIG ========== */
@@ -178,16 +184,35 @@ struct MQTTPayload {
     VibrationAnalysis vibration;
     
     // Raw acceleration samples (subset)
-    float raw_accel_x[100];
-    float raw_accel_y[100];
-    float raw_accel_z[100];
-    float raw_freq_hz[100];
+    float raw_accel_x[MQTT_FFT_POINTS];
+    float raw_accel_y[MQTT_FFT_POINTS];
+    float raw_accel_z[MQTT_FFT_POINTS];
+    float raw_freq_hz[MQTT_FFT_POINTS];
     uint32_t raw_sample_count;
     
     // System info
     float battery_voltage;
     int8_t wifi_rssi;
     int32_t uptime_ms;
+};
+
+struct MQTTPublishSummary {
+    bool has_publish;
+    bool success;
+    bool tls_connect_in_progress;
+    uint32_t publish_count;
+    uint32_t last_attempt_ms;
+    uint32_t last_success_ms;
+    uint32_t next_publish_due_ms;
+    int32_t seconds_until_next_publish;
+    uint16_t publish_interval_s;
+    uint16_t main_size;
+    uint16_t fft_x_size;
+    uint16_t fft_y_size;
+    uint16_t fft_z_size;
+    uint32_t subscribe_receive_count;
+    uint32_t last_subscribe_ms;
+    uint16_t last_subscribe_size;
 };
 
 /* Wakeup Info */
@@ -213,5 +238,8 @@ uint64_t millis_to_us(uint32_t ms);
 uint32_t us_to_ms(uint64_t us);
 
 const char* wifi_status_to_string(WiFiStatus status);
+uint32_t get_largest_free_block();
+void log_heap_state(const char* context);
+void mask_secret_to_buffer(const char* value, char* out, size_t out_size);
 
 #endif // COMMON_H
