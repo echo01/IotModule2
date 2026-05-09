@@ -17,7 +17,7 @@ public:
     
     // Read raw acceleration data
     bool readRawData(MEMSData& data);
-    
+    uint8_t readRegister(uint8_t reg, uint8_t *value);
     // Process vibration analysis
     bool processVibrationData(const MEMSData& raw_data, VibrationAnalysis& analysis);
     
@@ -30,9 +30,10 @@ public:
     // Get current settings
     uint16_t getDataRate() const;
     uint8_t getRange() const;
-    
+    uint8_t INT_SOURCE;
     // Interrupt setup
     bool setupInterrupt(uint8_t int_pin, bool activity);
+    bool clearInterruptSource(uint8_t* int_source = nullptr);
     
     // Check if data is available
     bool dataAvailable();

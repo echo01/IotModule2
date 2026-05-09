@@ -173,6 +173,7 @@ SystemConfig Storage::createDefaultConfig() {
     config.adxl345_offset_z = 0.0f;
     config.adxl345_int_threshold_mg = 250;
     config.adxl345_int_enabled = true;
+    config.adxl345_int_pin = 1;
     
     // Vibration signal validation defaults
     config.vibration_min_rms_g = VIBRATION_MIN_RMS_G;
@@ -223,6 +224,7 @@ void Storage::config_to_json(const SystemConfig& config, JsonDocument& doc) {
     doc["adxl345"]["offset_z"] = config.adxl345_offset_z;
     doc["adxl345"]["int_threshold_mg"] = config.adxl345_int_threshold_mg;
     doc["adxl345"]["int_enabled"] = config.adxl345_int_enabled;
+    doc["adxl345"]["int_pin"] = config.adxl345_int_pin;
     
     doc["vibration"]["min_rms_g"] = config.vibration_min_rms_g;
     doc["vibration"]["min_peak_g"] = config.vibration_min_peak_g;
@@ -301,6 +303,10 @@ SystemConfig Storage::json_to_config(const JsonDocument& doc) {
     config.adxl345_offset_z = doc["adxl345"]["offset_z"] | 0.0f;
     config.adxl345_int_threshold_mg = doc["adxl345"]["int_threshold_mg"] | 250;
     config.adxl345_int_enabled = doc["adxl345"]["int_enabled"] | true;
+    config.adxl345_int_pin = doc["adxl345"]["int_pin"] | 1;
+    if (config.adxl345_int_pin != 1 && config.adxl345_int_pin != 2) {
+        config.adxl345_int_pin = 1;
+    }
     
     config.vibration_min_rms_g = doc["vibration"]["min_rms_g"] | VIBRATION_MIN_RMS_G;
     config.vibration_min_peak_g = doc["vibration"]["min_peak_g"] | VIBRATION_MIN_PEAK_G;

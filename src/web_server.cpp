@@ -430,6 +430,7 @@ void WebServer::handleGetConfig(AsyncWebServerRequest* request) {
     doc["adxl345"]["offset_z"] = g_system_config.adxl345_offset_z;
     doc["adxl345"]["int_threshold_mg"] = g_system_config.adxl345_int_threshold_mg;
     doc["adxl345"]["int_enabled"] = g_system_config.adxl345_int_enabled;
+    doc["adxl345"]["int_pin"] = g_system_config.adxl345_int_pin;
     
     doc["vibration"]["min_rms_g"] = g_system_config.vibration_min_rms_g;
     doc["vibration"]["min_peak_g"] = g_system_config.vibration_min_peak_g;
@@ -595,43 +596,6 @@ void WebServer::handleSetNetworkConfig(AsyncWebServerRequest* request) {
     request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Network config applied.\"}");
 }
 
-void WebServer::handleScanSSID(AsyncWebServerRequest* request) {
-    if (!hasEnoughHeap(MIN_HEAP_FOR_GENERAL_JSON)) {
-        ERROR_PRINT("Insufficient heap for WiFi scan: %u bytes free", esp_get_free_heap_size());
-        request->send(503, "application/json", "{\"error\":\"low memory\"}");
-        return;
-    }
-
-    int networks = WiFi.scanNetworks(false, true);
-    if (networks < 0) {
-        request->send(500, "application/json", "{\"error\":\"scan failed\"}");
-        return;
-    }
-
-    // Use smaller buffer - scan results are small
-    StaticJsonDocument<2048> doc;
-    JsonArray arr = doc.createNestedArray("networks");
-
-    for (int i = 0; i < networks; ++i) {
-        String ssid = WiFi.SSID(i);
-        if (ssid.length() == 0) {
-            continue;
-        }
-
-        JsonObject n = arr.createNestedObject();
-        n["ssid"] = ssid;
-        n["rssi"] = WiFi.RSSI(i);
-        n["channel"] = WiFi.channel(i);
-        n["secure"] = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
-    }
-
-    WiFi.scanDelete();
-
-    String json;
-    serializeJson(doc, json);
-    request->send(200, "application/json", json);
-}
-
 void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     uint16_t rate_hz = request->hasParam("rate_hz", true) ? static_cast<uint16_t>(request->getParam("rate_hz", true)->value().toInt()) : g_system_config.adxl345_rate_hz;
     uint8_t range_g = request->hasParam("range_g", true) ? static_cast<uint8_t>(request->getParam("range_g", true)->value().toInt()) : g_system_config.adxl345_range_g;
@@ -640,6 +604,9 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     float offset_z = request->hasParam("offset_z", true) ? request->getParam("offset_z", true)->value().toFloat() : g_system_config.adxl345_offset_z;
     uint16_t int_threshold_mg = request->hasParam("int_threshold_mg", true) ? static_cast<uint16_t>(request->getParam("int_threshold_mg", true)->value().toInt()) : g_system_config.adxl345_int_threshold_mg;
     bool int_enabled = !request->hasParam("int_enabled", true) || request->getParam("int_enabled", true)->value() == "1";
+    uint8_t int_pin = request->hasParam("int_pin", true)
+        ? static_cast<uint8_t>(request->getParam("int_pin", true)->value().toInt())
+        : g_system_config.adxl345_int_pin;
     
     // Vibration parameters
     float min_rms_g = request->hasParam("min_rms_g", true) ? request->getParam("min_rms_g", true)->value().toFloat() : g_system_config.vibration_min_rms_g;
@@ -665,6 +632,7 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     g_system_config.adxl345_offset_z = offset_z;
     g_system_config.adxl345_int_threshold_mg = int_threshold_mg;
     g_system_config.adxl345_int_enabled = int_enabled;
+    g_system_config.adxl345_int_pin = (int_pin == 2) ? 2 : 1;
     
     g_system_config.vibration_min_rms_g = min_rms_g;
     g_system_config.vibration_min_peak_g = min_peak_g;
@@ -683,10 +651,11 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     g_mems_sensor.setRange(range_g);
     g_mems_sensor.setOffset(offset_x, offset_y, offset_z);
     g_mems_sensor.setInterruptThreshold(int_threshold_mg);
+    uint8_t gpio_int_pin = (g_system_config.adxl345_int_pin == 2) ? GPIO_ADXL345_INT2 : GPIO_ADXL345_INT1;
     if (int_enabled) {
-        g_mems_sensor.setupInterrupt(GPIO_ADXL345_INT1, true);
+        g_mems_sensor.setupInterrupt(gpio_int_pin, true);
     } else {
-        g_mems_sensor.setupInterrupt(GPIO_ADXL345_INT1, false);
+        g_mems_sensor.setupInterrupt(gpio_int_pin, false);
     }
 
     request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"MEMS config applied.\"}");

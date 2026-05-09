@@ -8,7 +8,7 @@ PowerManager::PowerManager()
 bool PowerManager::begin() {
     INFO_PRINT("Power Manager initializing...");
     
-    // Configure GPIOs for wakeup (external interrupts INT1=IO12, INT2=IO14)
+    // EXT1: ADXL345 interrupt lines only.
     uint64_t wake_mask = (1ULL << GPIO_ADXL345_INT1) | (1ULL << GPIO_ADXL345_INT2);
     esp_sleep_enable_ext1_wakeup(wake_mask, ESP_EXT1_WAKEUP_ALL_LOW);
     

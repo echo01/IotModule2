@@ -352,8 +352,8 @@ void setup() {
     pinMode(GPIO_MODE_SWITCH, INPUT_PULLUP);
     pinMode(GPIO_LED_STATUS, OUTPUT);
     pinMode(GPIO_MQTT_STATUS, OUTPUT);
-    pinMode(GPIO_ADXL345_INT1, INPUT);
-    pinMode(GPIO_ADXL345_INT2, INPUT);
+    pinMode(GPIO_ADXL345_INT1, INPUT_PULLDOWN);
+    pinMode(GPIO_ADXL345_INT2, INPUT_PULLDOWN);
     digitalWrite(GPIO_LED_STATUS, HIGH);   // Light LED on wakeup
     digitalWrite(GPIO_MQTT_STATUS, LOW);
     
@@ -404,7 +404,14 @@ void setup() {
                                 g_system_config.adxl345_offset_z);
         g_mems_sensor.setInterruptThreshold(g_system_config.adxl345_int_threshold_mg);
         if (g_system_config.adxl345_int_enabled) {
-            g_mems_sensor.setupInterrupt(GPIO_ADXL345_INT1, true);
+            uint8_t gpio_int_pin = (g_system_config.adxl345_int_pin == 2) ? GPIO_ADXL345_INT2 : GPIO_ADXL345_INT1;
+            g_mems_sensor.setupInterrupt(gpio_int_pin, true);
+            uint8_t int_source = 0;
+            if (g_mems_sensor.clearInterruptSource(&int_source)) {
+                INFO_PRINT("Cleared ADXL345 INT_SOURCE after wake: 0x%02X", int_source);
+            } else {
+                ERROR_PRINT("Failed to clear ADXL345 INT_SOURCE after wake");
+            }
         }
     }
     
@@ -555,7 +562,6 @@ void loop() {
     // Read GPIO mode switch
     static uint32_t last_mode_check = 0;
     static uint32_t last_sent_count = 0;
-    static uint32_t last_stack_log = 0;
     uint32_t now = millis();
     
     // Check mode switch periodically (every 5 seconds)
@@ -592,13 +598,16 @@ void loop() {
         if (g_system_status.data_sent_count > last_sent_count) {
             last_sent_count = g_system_status.data_sent_count;
             INFO_PRINT("Publish completed, arming deep sleep with ADXL345 wake interrupt");
+            if (g_system_config.adxl345_int_enabled) {
+                uint8_t int_source = 0;
+                if (g_mems_sensor.clearInterruptSource(&int_source)) {
+                    INFO_PRINT("Cleared ADXL345 INT_SOURCE before sleep: 0x%02X", int_source);
+                } else {
+                    ERROR_PRINT("Failed to clear ADXL345 INT_SOURCE before sleep");
+                }
+            }
             g_power_manager.enterDeepSleep(g_system_config.sleep_interval_sec);
         }
-    }
-
-    if ((now - last_stack_log) > 60000) {
-        last_stack_log = now;
-        log_all_task_stack_snapshots();
     }
     
     delay(100);  // Yield to other tasks

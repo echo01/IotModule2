@@ -153,6 +153,7 @@ struct SystemConfig {
     float adxl345_offset_z;
     uint16_t adxl345_int_threshold_mg;
     bool adxl345_int_enabled;
+    uint8_t adxl345_int_pin;
     
     // Vibration signal validation
     float vibration_min_rms_g;
