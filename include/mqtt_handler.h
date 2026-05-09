@@ -13,6 +13,7 @@ public:
     
     // Initialize with WiFi client and config
     bool begin(WiFiClient* client, const SystemConfig& config);
+    bool reconfigure(WiFiClient* client, const SystemConfig& config);
     
     // Connect to broker
     bool connect();
@@ -41,17 +42,27 @@ public:
     
     // Update publish interval
     void setPublishInterval(uint16_t seconds);
+    void setNextPublishDueMs(uint32_t due_ms);
 
-    // Last published payload (for UI/debug)
-    String getLastPayload() const;
+    // Publish summary for UI/debug
+    MQTTPublishSummary getPublishSummary() const;
+
+    // Test helper: pause MQTT activity temporarily during STA web access.
+    void pauseForWebAccess(uint32_t duration_ms);
+    bool isPaused() const;
+    bool isTlsConnectInProgress() const;
 
 private:
     PubSubClient mqtt_client;
+    WiFiClient* wifi_client;
+    WiFiClientSecure secure_client;
     MQTTStatus current_status;
     SystemConfig config;
     uint32_t last_publish_time;
+    uint32_t pause_until_ms;
     uint16_t publish_interval_s;
-    String last_payload_json;
+    volatile bool tls_connect_in_progress;
+    MQTTPublishSummary publish_summary;
     
     // Callbacks
     static void mqtt_callback(char* topic, byte* payload, unsigned int length);
@@ -61,6 +72,12 @@ private:
                            const MQTTPayload& payload);
     bool buildFFTAxisJSON(String& json, const MQTTPayload& payload, char axis);
     bool buildStatusJSON(String& json, const SystemStatus& status);
+    void updatePublishSummary(bool success,
+                              uint16_t main_size,
+                              uint16_t fft_x_size,
+                              uint16_t fft_y_size,
+                              uint16_t fft_z_size);
+    void recordSubscribeMessage(unsigned int length);
 };
 
 // Task function

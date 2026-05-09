@@ -1,5 +1,6 @@
 #include "common.h"
 #include <esp_sleep.h>
+#include <esp_heap_caps.h>
 
 /* Global debug mode flag - set based on GPIO27 */
 bool g_debug_mode = false;
@@ -77,4 +78,47 @@ uint64_t millis_to_us(uint32_t ms) {
 
 uint32_t us_to_ms(uint64_t us) {
     return (uint32_t)(us / 1000);
+}
+
+uint32_t get_largest_free_block() {
+    return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+}
+
+void log_heap_state(const char* context) {
+    INFO_PRINT("[%s] Heap free=%u largest=%u minimum=%u",
+               context,
+               esp_get_free_heap_size(),
+               get_largest_free_block(),
+               heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
+}
+
+void mask_secret_to_buffer(const char* value, char* out, size_t out_size) {
+    if (out == nullptr || out_size == 0) {
+        return;
+    }
+
+    out[0] = '\0';
+    if (value == nullptr) {
+        return;
+    }
+
+    const size_t len = strlen(value);
+    if (len == 0) {
+        return;
+    }
+
+    if (len <= 2) {
+        strlcpy(out, "**", out_size);
+        return;
+    }
+
+    out[0] = value[0];
+    size_t pos = 1;
+    while (pos < (len - 1) && pos < (out_size - 2)) {
+        out[pos++] = '*';
+    }
+    if (pos < out_size - 1) {
+        out[pos++] = value[len - 1];
+    }
+    out[pos] = '\0';
 }

@@ -70,6 +70,8 @@ private:
     void handleConnectingState(uint32_t now);
     void handleFailedState();
     void ensureAPRunning();
+    void stopAPMode();
+    bool shouldRunAPMode() const;
     void applySTAIPConfig();
     String buildDefaultAPSSID() const;
     const char* reasonToString(wl_status_t status) const;

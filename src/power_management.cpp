@@ -10,7 +10,7 @@ bool PowerManager::begin() {
     
     // Configure GPIOs for wakeup (external interrupts INT1=IO12, INT2=IO14)
     uint64_t wake_mask = (1ULL << GPIO_ADXL345_INT1) | (1ULL << GPIO_ADXL345_INT2);
-    esp_sleep_enable_ext1_wakeup(wake_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
+    esp_sleep_enable_ext1_wakeup(wake_mask, ESP_EXT1_WAKEUP_ALL_LOW);
     
     // Configure timer wakeup
     configureTimerWakeup(DEEP_SLEEP_INTERVAL_SEC);

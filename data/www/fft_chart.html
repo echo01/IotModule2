@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FFT Chart</title>
+  <style>
+    :root{--bg:#f2f5f9;--card:#fff;--ink:#0f172a;--muted:#475569}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:"Raleway",Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
+    .top{background:#111827;color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center}
+    .nav a{color:#c7d2fe;text-decoration:none;margin-right:12px;font-weight:600}
+    .wrap{max-width:1200px;margin:16px auto;padding:0 12px}
+    .card{background:var(--card);border-radius:12px;padding:14px;box-shadow:0 6px 18px rgba(0,0,0,.08)}
+    .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+    .status{margin-top:10px;color:var(--muted);font-size:14px}
+    canvas{width:100%;height:320px;background:#fff;border:1px solid #cbd5e1;border-radius:8px}
+    button,select{padding:10px 12px;border-radius:8px;border:1px solid #cbd5e1;background:#fff}
+    button{background:#0f766e;color:#fff;border:0;font-weight:700;cursor:pointer}
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div><strong>FIoT FFT Chart</strong></div>
+    <div class="nav">
+      <a href="/index.html">Dashboard</a>
+      <a href="/fft_chart.html">FFT Chart</a>
+      <a href="/mqtt_setting.html">MQTT Config</a>
+      <a href="/network_setting.html">Network Config</a>
+      <a href="/mems_setting.html">MEMS Config</a>
+      <a href="/system_setting.html">System</a>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="row" style="margin-bottom:10px">
+        <strong>FFT Spectrum 10 - 1200 Hz (Amplitude mm/s)</strong>
+        <label for="axisSelect">Axis:</label>
+        <select id="axisSelect"><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select>
+        <label for="scaleMode">Scale:</label>
+        <select id="scaleMode">
+          <option value="5">0 - 5 mm/s</option>
+          <option value="10">0 - 10 mm/s</option>
+          <option value="15">0 - 15 mm/s</option>
+          <option value="20">0 - 20 mm/s</option>
+          <option value="25">0 - 25 mm/s</option>
+          <option value="30">0 - 30 mm/s</option>
+          <option value="auto" selected>Auto</option>
+        </select>
+        <button id="refreshBtn" type="button">Refresh Now</button>
+      </div>
+      <canvas id="fftCanvas" width="1100" height="320"></canvas>
+      <div class="status" id="status">Loading FFT data...</div>
+    </div>
+  </div>
+
+<script>
+  let refreshTimer = null;
+
+  function drawSpectrum(freq, amp){
+    const canvas=document.getElementById('fftCanvas');
+    const ctx=canvas.getContext('2d');
+    const w=canvas.width,h=canvas.height;
+    ctx.clearRect(0,0,w,h);
+    const padL=50,padR=20,padT=20,padB=28;
+    const x0=padL,y0=h-padB,plotW=w-padL-padR,plotH=h-padT-padB;
+
+    ctx.strokeStyle='#94a3b8';
+    ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(x0,padT);
+    ctx.lineTo(x0,y0);
+    ctx.lineTo(x0+plotW,y0);
+    ctx.stroke();
+
+    const minF=10,maxF=1200,minA=0;
+    const scaleMode = document.getElementById('scaleMode').value;
+    let maxA = 30;
+    if (scaleMode === 'auto' && amp && amp.length > 0) {
+      let maxVal = 0;
+      for (let i = 0; i < amp.length; i++) {
+        const v = Number(amp[i]) || 0;
+        if (v > maxVal) maxVal = v;
+      }
+      maxA = Math.max(1, Math.ceil(maxVal * 1.2));
+    } else if (scaleMode !== 'auto') {
+      const parsed = Number(scaleMode);
+      if (!Number.isNaN(parsed) && parsed > 0) {
+        maxA = parsed;
+      }
+    }
+
+    const sx=f=>x0+((f-minF)/(maxF-minF))*plotW;
+    const sy=a=>y0-((a-minA)/(maxA-minA))*plotH;
+
+    [10,100,300,600,900,1200].forEach(f=>{
+      const x=sx(f);
+      ctx.strokeStyle='#e2e8f0';
+      ctx.beginPath();
+      ctx.moveTo(x,padT);
+      ctx.lineTo(x,y0);
+      ctx.stroke();
+      ctx.fillStyle='#475569';
+      ctx.fillText(String(f),x-10,h-8);
+    });
+
+    const yTicks = 6;
+    for (let i = 0; i <= yTicks; i++) {
+      const a = (maxA / yTicks) * i;
+      const y = sy(a);
+      ctx.strokeStyle='#e2e8f0';
+      ctx.beginPath();
+      ctx.moveTo(x0,y);
+      ctx.lineTo(x0+plotW,y);
+      ctx.stroke();
+      ctx.fillStyle='#475569';
+      ctx.fillText(a.toFixed(1), 6, y + 4);
+    }
+
+    if(!freq || !amp || freq.length===0) {
+      return;
+    }
+
+    ctx.strokeStyle='#2563eb';
+    ctx.lineWidth=2;
+    ctx.beginPath();
+    for(let i=0;i<freq.length;i++){
+      const x=sx(Number(freq[i]));
+      let a=Number(amp[i]);
+      if(a<0)a=0;
+      if(a>maxA)a=maxA;
+      const y=sy(a);
+      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+  }
+
+  async function loadSpectrum(){
+    const axis=document.getElementById('axisSelect').value;
+    const status=document.getElementById('status');
+    status.textContent = `Loading ${axis.toUpperCase()} axis FFT...`;
+
+    try{
+      const r=await fetch(`/api/fft_spectrum?axis=${axis}`);
+      const text=await r.text();
+      let d={};
+      try {
+        d=JSON.parse(text);
+      } catch (_) {
+        throw new Error('invalid json');
+      }
+
+      if(!r.ok){
+        status.textContent = d.error ? `FFT unavailable: ${d.error}` : 'FFT unavailable';
+        drawSpectrum([], []);
+        return;
+      }
+
+      drawSpectrum(d.freq_hz||[], d.amp_mm_s||[]);
+      const pointCount = Array.isArray(d.freq_hz) ? d.freq_hz.length : 0;
+      status.textContent = `Showing ${axis.toUpperCase()} axis FFT with ${pointCount} points. Auto-refresh every 4 seconds.`;
+    }catch(_){
+      status.textContent = 'Unable to load FFT data from device.';
+      drawSpectrum([], []);
+    }
+  }
+
+  function startRefresh(){
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+    }
+    refreshTimer = setInterval(loadSpectrum, 4000);
+  }
+
+  document.getElementById('axisSelect').addEventListener('change', loadSpectrum);
+  document.getElementById('scaleMode').addEventListener('change', loadSpectrum);
+  document.getElementById('refreshBtn').addEventListener('click', loadSpectrum);
+
+  startRefresh();
+  loadSpectrum();
+</script>
+</body>
+</html>

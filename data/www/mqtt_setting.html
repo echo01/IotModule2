@@ -10,12 +10,13 @@
     .wrap{max-width:760px;margin:16px auto;padding:0 12px}
     .card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 8px 18px rgba(0,0,0,.08)}
     label{display:block;font-weight:600;margin:10px 0 6px}
-    input{width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px}
+    input,select{width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px}
     button{margin-top:14px;padding:10px 14px;border:0;border-radius:8px;background:#0f766e;color:#fff;font-weight:700;cursor:pointer}
     .msg{margin-top:10px;color:#0f172a}
     .pw{display:grid;grid-template-columns:1fr 44px;gap:8px;align-items:center}
     .eye{padding:10px 0;background:#334155;color:#fff;border-radius:8px;border:0;cursor:pointer}
     .summary{padding:10px;border:1px dashed #94a3b8;border-radius:8px;background:#f8fafc;color:#334155;margin-bottom:10px}
+    .hint{margin-top:6px;font-size:12px;color:#64748b}
   </style>
 </head>
 <body>
@@ -23,6 +24,7 @@
     <div><strong>MQTT Broker Config</strong></div>
     <div class="nav">
       <a href="/index.html">Dashboard</a>
+      <a href="/fft_chart.html">FFT Chart</a>
       <a href="/mqtt_setting.html">MQTT Config</a>
       <a href="/network_setting.html">Network Config</a>
       <a href="/mems_setting.html">MEMS Config</a>
@@ -33,7 +35,14 @@
   <div class="wrap"><div class="card">
     <div class="summary" id="summary">Current: loading...</div>
     <form id="f">
+      <label>Protocol</label>
+      <select name="protocol" id="protocol">
+        <option value="mqtt">MQTT</option>
+        <option value="mqtts">MQTTS</option>
+      </select>
+      <div class="hint">MQTT ปกติใช้ port 1883, MQTTS ปกติใช้ port 8883</div>
       <label>Broker</label><input name="broker" required>
+      <div class="hint">ตัวอย่าง: `broker.hivemq.com`, `test.mosquitto.org`, `mqtt.example.com` หรือ `192.168.1.10`</div>
       <label>Port</label><input name="port" type="number" min="1" max="65535" value="1883">
       <label>Client ID</label><input name="client_id">
       <label>Username</label><input name="username">
@@ -56,10 +65,23 @@ const summary=document.getElementById('summary');
 function setv(name,v){const e=f.querySelector(`[name="${name}"]`); if(e) e.value=v||'';}
 
 function renderSummary(c){
-  summary.textContent = `Current Broker: ${c.mqtt?.broker || '-'}:${c.mqtt?.port || '-'} | Main: ${c.mqtt?.topic_publish || 'viot/vibration'} | FFT X/Y/Z: ${c.mqtt?.topic_fft_x || 'viot/vibration/fft/x'} | ${c.mqtt?.topic_fft_y || 'viot/vibration/fft/y'} | ${c.mqtt?.topic_fft_z || 'viot/vibration/fft/z'} | Interval: ${c.mqtt?.publish_interval_s || 60}s | Status: ${c.mqtt?.status || '-'}`;
+  const protocol = c.mqtt?.use_tls ? 'MQTTS' : 'MQTT';
+  summary.textContent = `Current ${protocol} Broker: ${c.mqtt?.broker || '-'}:${c.mqtt?.port || '-'} | Main: ${c.mqtt?.topic_publish || 'viot/vibration'} | FFT X/Y/Z: ${c.mqtt?.topic_fft_x || 'viot/vibration/fft/x'} | ${c.mqtt?.topic_fft_y || 'viot/vibration/fft/y'} | ${c.mqtt?.topic_fft_z || 'viot/vibration/fft/z'} | Interval: ${c.mqtt?.publish_interval_s || 60}s | Status: ${c.mqtt?.status || '-'}`;
+}
+
+function syncPortForProtocol(force=false){
+  const protocol = f.protocol.value;
+  const portInput = f.querySelector('[name="port"]');
+  const port = String(portInput.value || '');
+  if (protocol === 'mqtts') {
+    if (force || port === '' || port === '1883') portInput.value = '8883';
+  } else if (force || port === '' || port === '8883') {
+    portInput.value = '1883';
+  }
 }
 
 fetch('/api/config').then(r=>r.json()).then(c=>{
+  setv('protocol', c.mqtt?.use_tls ? 'mqtts' : 'mqtt');
   setv('broker', c.mqtt?.broker); setv('port', c.mqtt?.port||1883);
   setv('client_id', c.mqtt?.client_id); setv('username', c.mqtt?.username);
   setv('password', c.mqtt?.password); setv('topic_publish', c.mqtt?.topic_publish);
@@ -68,8 +90,11 @@ fetch('/api/config').then(r=>r.json()).then(c=>{
   setv('topic_fft_z', c.mqtt?.topic_fft_z || 'viot/vibration/fft/z');
   setv('topic_subscribe', c.mqtt?.topic_subscribe);
   setv('publish_interval_s', c.mqtt?.publish_interval_s || 60);
+  syncPortForProtocol(false);
   renderSummary(c);
 }).catch(()=>{ summary.textContent='Current: unavailable'; });
+
+document.getElementById('protocol').addEventListener('change', ()=>syncPortForProtocol(false));
 
 document.getElementById('toggleMqttPw').onclick=()=>{
   const p=document.getElementById('mqtt_password');
@@ -80,9 +105,10 @@ document.getElementById('toggleMqttPw').onclick=()=>{
 f.onsubmit=async (e)=>{
   e.preventDefault();
   const fd=new FormData(f);
+  fd.set('use_tls', f.protocol.value === 'mqtts' ? '1' : '0');
   const res=await fetch('/api/mqtt_config',{method:'POST',body:fd});
   const t=await res.text();
-  msg.textContent = res.ok ? 'Saved. Reboot device to use new broker settings.' : `Save failed: ${t}`;
+  msg.textContent = res.ok ? `Saved ${f.protocol.value.toUpperCase()} config. Reboot device to use new broker settings.` : `Save failed: ${t}`;
 };
 </script>
 </body>
