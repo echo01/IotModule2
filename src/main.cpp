@@ -63,6 +63,33 @@ StackType_t g_mqtt_publish_task_stack[stack_words(MQTT_PUBLISH_TASK_STACK_SIZE)]
 StaticTask_t g_web_task_buffer;
 StackType_t g_web_task_stack[stack_words(WEB_TASK_STACK_SIZE)];
 }
+TaskHandle_t g_mems_task_handle = nullptr;
+TaskHandle_t g_adc_task_handle = nullptr;
+TaskHandle_t g_wifi_task_handle = nullptr;
+TaskHandle_t g_mqtt_task_handle = nullptr;
+TaskHandle_t g_mqtt_publish_task_handle = nullptr;
+TaskHandle_t g_web_task_handle = nullptr;
+
+namespace {
+constexpr size_t stack_words(size_t bytes) {
+    return (bytes + sizeof(StackType_t) - 1) / sizeof(StackType_t);
+}
+
+StaticQueue_t g_mems_queue_struct;
+uint8_t g_mems_queue_storage[MEMS_DATA_QUEUE_SIZE * sizeof(VibrationAnalysis)];
+StaticQueue_t g_mqtt_payload_queue_struct;
+uint8_t g_mqtt_payload_queue_storage[MQTT_PAYLOAD_QUEUE_SIZE * sizeof(MQTTPayload)];
+StaticQueue_t g_websocket_queue_struct;
+uint8_t g_websocket_queue_storage[WEBSOCKET_QUEUE_SIZE * sizeof(VibrationAnalysis)];
+StaticEventGroup_t g_event_group_struct;
+
+StaticTask_t g_adc_task_buffer;
+StackType_t g_adc_task_stack[stack_words(ADC_TASK_STACK_SIZE)];
+StaticTask_t g_mqtt_publish_task_buffer;
+StackType_t g_mqtt_publish_task_stack[stack_words(MQTT_PUBLISH_TASK_STACK_SIZE)];
+StaticTask_t g_web_task_buffer;
+StackType_t g_web_task_stack[stack_words(WEB_TASK_STACK_SIZE)];
+}
 
 /* ========== EVENT GROUP ========== */
 EventGroupHandle_t g_event_group = nullptr;
@@ -80,11 +107,20 @@ static void print_runtime_config_debug() {
     mask_secret_to_buffer(g_system_config.ap_password, ap_pass_mask, sizeof(ap_pass_mask));
     mask_secret_to_buffer(g_system_config.mqtt_password, mqtt_pass_mask, sizeof(mqtt_pass_mask));
 
+    char wifi_pass_mask[sizeof(g_system_config.wifi_password)];
+    char ap_pass_mask[sizeof(g_system_config.ap_password)];
+    char mqtt_pass_mask[sizeof(g_system_config.mqtt_password)];
+    mask_secret_to_buffer(g_system_config.wifi_password, wifi_pass_mask, sizeof(wifi_pass_mask));
+    mask_secret_to_buffer(g_system_config.ap_password, ap_pass_mask, sizeof(ap_pass_mask));
+    mask_secret_to_buffer(g_system_config.mqtt_password, mqtt_pass_mask, sizeof(mqtt_pass_mask));
+
     INFO_PRINT("Network config: STA_SSID='%s' STA_PASS='%s' AP_ENABLED=%s AP_SSID='%s' AP_PASS='%s'",
                g_system_config.wifi_ssid,
                wifi_pass_mask,
+               wifi_pass_mask,
                g_system_config.wifi_ap_enabled ? "true" : "false",
                g_system_config.ap_ssid,
+               ap_pass_mask);
                ap_pass_mask);
     INFO_PRINT("STA IP mode: %s IP='%s' GW='%s' MASK='%s' DNS1='%s' DNS2='%s'",
                g_system_config.sta_use_static_ip ? "STATIC" : "DHCP",
@@ -95,10 +131,13 @@ static void print_runtime_config_debug() {
                g_system_config.sta_dns2);
     INFO_PRINT("MQTT config: PROTOCOL='%s' BROKER='%s' PORT=%u CLIENT_ID='%s' USER='%s' PASS='%s' MAIN='%s' FFT_X='%s' FFT_Y='%s' FFT_Z='%s' SUB='%s' INTERVAL=%us",
                g_system_config.mqtt_use_tls ? "MQTTS" : "MQTT",
+    INFO_PRINT("MQTT config: PROTOCOL='%s' BROKER='%s' PORT=%u CLIENT_ID='%s' USER='%s' PASS='%s' MAIN='%s' FFT_X='%s' FFT_Y='%s' FFT_Z='%s' SUB='%s' INTERVAL=%us",
+               g_system_config.mqtt_use_tls ? "MQTTS" : "MQTT",
                g_system_config.mqtt_broker,
                g_system_config.mqtt_port,
                g_system_config.mqtt_client_id,
                g_system_config.mqtt_username,
+               mqtt_pass_mask,
                mqtt_pass_mask,
                g_system_config.mqtt_topic_publish,
                g_system_config.mqtt_topic_fft_x,
@@ -107,6 +146,7 @@ static void print_runtime_config_debug() {
                g_system_config.mqtt_topic_subscribe,
                g_system_config.mqtt_publish_interval_s);
     log_heap_state("SETUP_CONFIG");
+    log_heap_state("SETUP_CONFIG");
 }
 
 static void log_stack_watermark(const char* task_name) {
@@ -114,6 +154,25 @@ static void log_stack_watermark(const char* task_name) {
     if (watermark < STACK_LOW_WATERMARK_WORDS) {
         ERROR_PRINT("%s task stack low: %u words free", task_name, static_cast<unsigned>(watermark));
     }
+}
+
+static void log_task_stack_snapshot(const char* task_name, TaskHandle_t handle) {
+    if (handle == nullptr) {
+        return;
+    }
+
+    INFO_PRINT("[STACK] %s watermark=%u words free",
+               task_name,
+               static_cast<unsigned>(uxTaskGetStackHighWaterMark(handle)));
+}
+
+static void log_all_task_stack_snapshots() {
+    log_task_stack_snapshot("MEMS", g_mems_task_handle);
+    log_task_stack_snapshot("ADC", g_adc_task_handle);
+    log_task_stack_snapshot("WiFi", g_wifi_task_handle);
+    log_task_stack_snapshot("MQTT", g_mqtt_task_handle);
+    log_task_stack_snapshot("MQTT-Pub", g_mqtt_publish_task_handle);
+    log_task_stack_snapshot("Web", g_web_task_handle);
 }
 
 static void log_task_stack_snapshot(const char* task_name, TaskHandle_t handle) {
@@ -154,6 +213,12 @@ void mems_task(void* parameter) {
             continue;
         }
 
+        if (g_mqtt_handler.isTlsConnectInProgress()) {
+            DEBUG_PRINT("MEMS task paused during MQTTS connect mode");
+            vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000));
+            continue;
+        }
+
         // Wait for startup delay to allow sensor to settle
         if ((millis() - task_start_time) < STARTUP_DELAY) {
             vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(100));
@@ -161,6 +226,13 @@ void mems_task(void* parameter) {
         }
         
         // Read sensor data
+        std::unique_ptr<MEMSData> raw_data(new (std::nothrow) MEMSData());
+        if (!raw_data) {
+            ERROR_PRINT("Failed to allocate MEMS buffer on heap (largest=%u)", get_largest_free_block());
+            vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000));
+            continue;
+        }
+
         std::unique_ptr<MEMSData> raw_data(new (std::nothrow) MEMSData());
         if (!raw_data) {
             ERROR_PRINT("Failed to allocate MEMS buffer on heap (largest=%u)", get_largest_free_block());
@@ -252,6 +324,9 @@ void mqtt_publish_task(void* parameter) {
     uint16_t publish_interval_s = g_system_config.mqtt_publish_interval_s;
     uint32_t publish_interval_ms = static_cast<uint32_t>(publish_interval_s) * 1000UL;
     g_mqtt_handler.setNextPublishDueMs(last_publish + publish_interval_ms);
+    uint16_t publish_interval_s = g_system_config.mqtt_publish_interval_s;
+    uint32_t publish_interval_ms = static_cast<uint32_t>(publish_interval_s) * 1000UL;
+    g_mqtt_handler.setNextPublishDueMs(last_publish + publish_interval_ms);
     
     VibrationAnalysis latest_analysis = {};
     bool has_valid_analysis = false;
@@ -275,8 +350,16 @@ void mqtt_publish_task(void* parameter) {
         }
         g_mqtt_handler.setNextPublishDueMs(last_publish + publish_interval_ms);
 
+        if (publish_interval_s != g_system_config.mqtt_publish_interval_s) {
+            publish_interval_s = g_system_config.mqtt_publish_interval_s;
+            publish_interval_ms = static_cast<uint32_t>(publish_interval_s) * 1000UL;
+            g_mqtt_handler.setPublishInterval(publish_interval_s);
+        }
+        g_mqtt_handler.setNextPublishDueMs(last_publish + publish_interval_ms);
+
         if (has_valid_analysis &&
             g_mqtt_handler.isConnected() && 
+            !g_mqtt_handler.isTlsConnectInProgress() &&
             !g_mqtt_handler.isTlsConnectInProgress() &&
             (now - last_publish) >= publish_interval_ms) {
             
@@ -295,6 +378,9 @@ void mqtt_publish_task(void* parameter) {
             g_mems_sensor.getFFTSpectrum('x', payload.raw_freq_hz, payload.raw_accel_x, MQTT_FFT_POINTS, points_x);
             g_mems_sensor.getFFTSpectrum('y', payload.raw_freq_hz, payload.raw_accel_y, MQTT_FFT_POINTS, points_y);
             g_mems_sensor.getFFTSpectrum('z', payload.raw_freq_hz, payload.raw_accel_z, MQTT_FFT_POINTS, points_z);
+            g_mems_sensor.getFFTSpectrum('x', payload.raw_freq_hz, payload.raw_accel_x, MQTT_FFT_POINTS, points_x);
+            g_mems_sensor.getFFTSpectrum('y', payload.raw_freq_hz, payload.raw_accel_y, MQTT_FFT_POINTS, points_y);
+            g_mems_sensor.getFFTSpectrum('z', payload.raw_freq_hz, payload.raw_accel_z, MQTT_FFT_POINTS, points_z);
             payload.raw_sample_count = points_x;
             if (points_y < payload.raw_sample_count) payload.raw_sample_count = points_y;
             if (points_z < payload.raw_sample_count) payload.raw_sample_count = points_z;
@@ -302,6 +388,7 @@ void mqtt_publish_task(void* parameter) {
             // Publish
             if (g_mqtt_handler.publishVibrationData(latest_analysis, payload)) {
                 last_publish = now;
+                g_mqtt_handler.setNextPublishDueMs(last_publish + publish_interval_ms);
                 g_mqtt_handler.setNextPublishDueMs(last_publish + publish_interval_ms);
                 g_system_status.data_sent_count++;
                 
@@ -354,6 +441,8 @@ void setup() {
     pinMode(GPIO_MQTT_STATUS, OUTPUT);
     pinMode(GPIO_ADXL345_INT1, INPUT_PULLUP);
     pinMode(GPIO_ADXL345_INT2, INPUT_PULLUP);
+    pinMode(GPIO_ADXL345_INT1, INPUT_PULLDOWN);
+    pinMode(GPIO_ADXL345_INT2, INPUT_PULLDOWN);
     digitalWrite(GPIO_LED_STATUS, HIGH);   // Light LED on wakeup
     digitalWrite(GPIO_MQTT_STATUS, LOW);
     
@@ -408,6 +497,14 @@ void setup() {
             g_mems_sensor.setupInterrupt(GPIO_ADXL345_INT1, true);
         } else {
             g_mems_sensor.setupInterrupt(GPIO_ADXL345_INT1, false);
+            uint8_t gpio_int_pin = (g_system_config.adxl345_int_pin == 2) ? GPIO_ADXL345_INT2 : GPIO_ADXL345_INT1;
+            g_mems_sensor.setupInterrupt(gpio_int_pin, true);
+            uint8_t int_source = 0;
+            if (g_mems_sensor.clearInterruptSource(&int_source)) {
+                INFO_PRINT("Cleared ADXL345 INT_SOURCE after wake: 0x%02X", int_source);
+            } else {
+                ERROR_PRINT("Failed to clear ADXL345 INT_SOURCE after wake");
+            }
         }
     }
     
@@ -430,6 +527,22 @@ void setup() {
     
     /* ========== FREERTOS QUEUE INITIALIZATION ========== */
     
+    g_mems_data_queue = xQueueCreateStatic(
+        MEMS_DATA_QUEUE_SIZE,
+        sizeof(VibrationAnalysis),
+        g_mems_queue_storage,
+        &g_mems_queue_struct);
+    g_mqtt_payload_queue = xQueueCreateStatic(
+        MQTT_PAYLOAD_QUEUE_SIZE,
+        sizeof(MQTTPayload),
+        g_mqtt_payload_queue_storage,
+        &g_mqtt_payload_queue_struct);
+    g_websocket_queue = xQueueCreateStatic(
+        WEBSOCKET_QUEUE_SIZE,
+        sizeof(VibrationAnalysis),
+        g_websocket_queue_storage,
+        &g_websocket_queue_struct);
+    g_event_group = xEventGroupCreateStatic(&g_event_group_struct);
     g_mems_data_queue = xQueueCreateStatic(
         MEMS_DATA_QUEUE_SIZE,
         sizeof(VibrationAnalysis),
@@ -483,16 +596,20 @@ void setup() {
         nullptr,
         MEMS_TASK_PRIORITY,
         &g_mems_task_handle,
+        &g_mems_task_handle,
         MEMS_TASK_CORE
     );
     
     // ADC battery monitor task
+    g_adc_task_handle = xTaskCreateStaticPinnedToCore(
     g_adc_task_handle = xTaskCreateStaticPinnedToCore(
         adc_task,
         "ADC",
         ADC_TASK_STACK_SIZE,
         nullptr,
         ADC_TASK_PRIORITY,
+        g_adc_task_stack,
+        &g_adc_task_buffer,
         g_adc_task_stack,
         &g_adc_task_buffer,
         ADC_TASK_CORE
@@ -506,6 +623,7 @@ void setup() {
         &g_wifi_handler,
         WIFI_TASK_PRIORITY,
         &g_wifi_task_handle,
+        &g_wifi_task_handle,
         WIFI_TASK_CORE
     );
     
@@ -517,10 +635,12 @@ void setup() {
         &g_mqtt_handler,
         MQTT_TASK_PRIORITY,
         &g_mqtt_task_handle,
+        &g_mqtt_task_handle,
         MQTT_TASK_CORE
     );
     
     // MQTT publish task
+    g_mqtt_publish_task_handle = xTaskCreateStaticPinnedToCore(
     g_mqtt_publish_task_handle = xTaskCreateStaticPinnedToCore(
         mqtt_publish_task,
         "MQTT-Pub",
@@ -529,10 +649,13 @@ void setup() {
         MQTT_TASK_PRIORITY + 1,
         g_mqtt_publish_task_stack,
         &g_mqtt_publish_task_buffer,
+        g_mqtt_publish_task_stack,
+        &g_mqtt_publish_task_buffer,
         MQTT_TASK_CORE
     );
     
     // Web server task
+    g_web_task_handle = xTaskCreateStaticPinnedToCore(
     g_web_task_handle = xTaskCreateStaticPinnedToCore(
         web_task,
         "Web",
@@ -541,10 +664,13 @@ void setup() {
         WEB_TASK_PRIORITY,
         g_web_task_stack,
         &g_web_task_buffer,
+        g_web_task_stack,
+        &g_web_task_buffer,
         WEB_TASK_CORE
     );
     
     INFO_PRINT("All tasks created");
+    log_heap_state("TASKS_CREATED");
     log_heap_state("TASKS_CREATED");
     INFO_PRINT("===== Setup Complete =====\n");
     
@@ -604,6 +730,14 @@ void loop() {
         if (g_system_status.data_sent_count > last_sent_count) {
             last_sent_count = g_system_status.data_sent_count;
             INFO_PRINT("Publish completed, arming deep sleep with ADXL345 wake interrupt");
+            if (g_system_config.adxl345_int_enabled) {
+                uint8_t int_source = 0;
+                if (g_mems_sensor.clearInterruptSource(&int_source)) {
+                    INFO_PRINT("Cleared ADXL345 INT_SOURCE before sleep: 0x%02X", int_source);
+                } else {
+                    ERROR_PRINT("Failed to clear ADXL345 INT_SOURCE before sleep");
+                }
+            }
             g_power_manager.enterDeepSleep(g_system_config.sleep_interval_sec);
         }
     }

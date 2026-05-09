@@ -26,8 +26,16 @@ bool Storage::loadConfig(SystemConfig& config) {
     File file = SPIFFS.open(CONFIG_FILE_PATH, "r");
     if (!file) {
         ERROR_PRINT("Failed to open config file");
+
+    File file = SPIFFS.open(CONFIG_FILE_PATH, "r");
+    if (!file) {
+        ERROR_PRINT("Failed to open config file");
         return false;
     }
+
+    StaticJsonDocument<4096> doc;
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
 
     StaticJsonDocument<4096> doc;
     DeserializationError error = deserializeJson(doc, file);
@@ -46,6 +54,18 @@ bool Storage::loadConfig(SystemConfig& config) {
 }
 
 bool Storage::saveConfig(const SystemConfig& config) {
+    File file = SPIFFS.open(CONFIG_FILE_PATH, "w");
+    if (!file) {
+        ERROR_PRINT("Failed to open file for writing: %s", CONFIG_FILE_PATH);
+        return false;
+    }
+
+    StaticJsonDocument<4096> doc;
+    config_to_json(config, doc);
+    size_t written = serializeJson(doc, file);
+    file.close();
+
+    if (written > 0) {
     File file = SPIFFS.open(CONFIG_FILE_PATH, "w");
     if (!file) {
         ERROR_PRINT("Failed to open file for writing: %s", CONFIG_FILE_PATH);
@@ -173,6 +193,7 @@ SystemConfig Storage::createDefaultConfig() {
     config.adxl345_offset_z = 0.0f;
     config.adxl345_int_threshold_mg = 250;
     config.adxl345_int_enabled = true;
+    config.adxl345_int_pin = 1;
     
     // Vibration signal validation defaults
     config.vibration_min_rms_g = VIBRATION_MIN_RMS_G;
@@ -190,6 +211,7 @@ SystemConfig Storage::createDefaultConfig() {
     return config;
 }
 
+void Storage::config_to_json(const SystemConfig& config, JsonDocument& doc) {
 void Storage::config_to_json(const SystemConfig& config, JsonDocument& doc) {
     doc["wifi"]["ssid"] = config.wifi_ssid;
     doc["wifi"]["password"] = config.wifi_password;
@@ -224,6 +246,7 @@ void Storage::config_to_json(const SystemConfig& config, JsonDocument& doc) {
     doc["adxl345"]["offset_z"] = config.adxl345_offset_z;
     doc["adxl345"]["int_threshold_mg"] = config.adxl345_int_threshold_mg;
     doc["adxl345"]["int_enabled"] = config.adxl345_int_enabled;
+    doc["adxl345"]["int_pin"] = config.adxl345_int_pin;
     
     doc["vibration"]["min_rms_g"] = config.vibration_min_rms_g;
     doc["vibration"]["min_peak_g"] = config.vibration_min_peak_g;
@@ -310,6 +333,10 @@ SystemConfig Storage::json_to_config(const JsonDocument& doc) {
     config.adxl345_offset_z = doc["adxl345"]["offset_z"] | 0.0f;
     config.adxl345_int_threshold_mg = doc["adxl345"]["int_threshold_mg"] | 250;
     config.adxl345_int_enabled = doc["adxl345"]["int_enabled"] | true;
+    config.adxl345_int_pin = doc["adxl345"]["int_pin"] | 1;
+    if (config.adxl345_int_pin != 1 && config.adxl345_int_pin != 2) {
+        config.adxl345_int_pin = 1;
+    }
     
     config.vibration_min_rms_g = doc["vibration"]["min_rms_g"] | VIBRATION_MIN_RMS_G;
     config.vibration_min_peak_g = doc["vibration"]["min_peak_g"] | VIBRATION_MIN_PEAK_G;
