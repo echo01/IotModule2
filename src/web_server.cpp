@@ -431,7 +431,6 @@ void WebServer::handleGetConfig(AsyncWebServerRequest* request) {
     doc["adxl345"]["offset_z"] = g_system_config.adxl345_offset_z;
     doc["adxl345"]["int_threshold_mg"] = g_system_config.adxl345_int_threshold_mg;
     doc["adxl345"]["int_enabled"] = g_system_config.adxl345_int_enabled;
-    doc["adxl345"]["int_pin"] = g_system_config.adxl345_int_pin;
     
     doc["vibration"]["min_rms_g"] = g_system_config.vibration_min_rms_g;
     doc["vibration"]["min_peak_g"] = g_system_config.vibration_min_peak_g;
@@ -441,6 +440,8 @@ void WebServer::handleGetConfig(AsyncWebServerRequest* request) {
     doc["vibration"]["max_freq_hz"] = g_system_config.vibration_max_freq_hz;
     
     doc["power"]["sleep_enabled"] = g_system_config.sleep_enabled;
+    doc["power"]["sleep_interval_sec"] = g_system_config.sleep_interval_sec;
+    doc["power"]["log_enabled"] = g_system_config.log_enabled;
 
     String json;
     json.reserve(measureJson(doc) + 1);
@@ -641,9 +642,6 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     float offset_z = request->hasParam("offset_z", true) ? request->getParam("offset_z", true)->value().toFloat() : g_system_config.adxl345_offset_z;
     uint16_t int_threshold_mg = request->hasParam("int_threshold_mg", true) ? static_cast<uint16_t>(request->getParam("int_threshold_mg", true)->value().toInt()) : g_system_config.adxl345_int_threshold_mg;
     bool int_enabled = !request->hasParam("int_enabled", true) || request->getParam("int_enabled", true)->value() == "1";
-    uint8_t int_pin = request->hasParam("int_pin", true)
-        ? static_cast<uint8_t>(request->getParam("int_pin", true)->value().toInt())
-        : g_system_config.adxl345_int_pin;
     
     // Vibration parameters
     float min_rms_g = request->hasParam("min_rms_g", true) ? request->getParam("min_rms_g", true)->value().toFloat() : g_system_config.vibration_min_rms_g;
@@ -652,6 +650,23 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     float deadband_g = request->hasParam("deadband_g", true) ? request->getParam("deadband_g", true)->value().toFloat() : g_system_config.vibration_deadband_g;
     float min_freq_hz = request->hasParam("min_freq_hz", true) ? request->getParam("min_freq_hz", true)->value().toFloat() : g_system_config.vibration_min_freq_hz;
     float max_freq_hz = request->hasParam("max_freq_hz", true) ? request->getParam("max_freq_hz", true)->value().toFloat() : g_system_config.vibration_max_freq_hz;
+    uint32_t sleep_interval_sec = request->hasParam("sleep_interval_sec", true)
+        ? static_cast<uint32_t>(request->getParam("sleep_interval_sec", true)->value().toInt())
+        : g_system_config.sleep_interval_sec;
+
+    if (sleep_interval_sec < 60) {
+        sleep_interval_sec = 60;
+    } else if (sleep_interval_sec > 86400) {
+        sleep_interval_sec = 86400;
+    }
+
+    if (rate_hz <= 400) {
+        rate_hz = 400;
+    } else if (rate_hz <= 800) {
+        rate_hz = 800;
+    } else {
+        rate_hz = 1600;
+    }
 
     g_system_config.adxl345_rate_hz = rate_hz;
     g_system_config.adxl345_range_g = range_g;
@@ -660,7 +675,6 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     g_system_config.adxl345_offset_z = offset_z;
     g_system_config.adxl345_int_threshold_mg = int_threshold_mg;
     g_system_config.adxl345_int_enabled = int_enabled;
-    g_system_config.adxl345_int_pin = (int_pin == 2) ? 2 : 1;
     
     g_system_config.vibration_min_rms_g = min_rms_g;
     g_system_config.vibration_min_peak_g = min_peak_g;
@@ -679,11 +693,10 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     g_mems_sensor.setRange(range_g);
     g_mems_sensor.setOffset(offset_x, offset_y, offset_z);
     g_mems_sensor.setInterruptThreshold(int_threshold_mg);
-    uint8_t gpio_int_pin = (g_system_config.adxl345_int_pin == 2) ? GPIO_ADXL345_INT2 : GPIO_ADXL345_INT1;
     if (int_enabled) {
-        g_mems_sensor.setupInterrupt(gpio_int_pin, true);
+        g_mems_sensor.setupInterrupt(GPIO_ADXL345_INT1, true);
     } else {
-        g_mems_sensor.setupInterrupt(gpio_int_pin, false);
+        g_mems_sensor.setupInterrupt(GPIO_ADXL345_INT1, false);
     }
 
     request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"MEMS config applied.\"}");

@@ -1,8 +1,6 @@
 #include "sensors.h"
 #include <math.h>
 #include "arduinoFFT.h"
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
 
 namespace {
 constexpr uint8_t REG_DEVID = 0x00;
@@ -21,41 +19,27 @@ constexpr uint8_t DATA_FORMAT_INT_ACTIVE_LOW = 0x20;
 constexpr uint8_t INT_ACTIVITY = 0x10;
 
 bool writeRegister(uint8_t reg, uint8_t value) {
-    if (!lockI2CBus()) {
-        return false;
-    }
-
     Wire.beginTransmission(ADXL345_I2C_ADDRESS);
     Wire.write(reg);
     Wire.write(value);
-    bool ok = (Wire.endTransmission() == 0);
-
-    unlockI2CBus();
-    return ok;
+    return Wire.endTransmission() == 0;
 }
 
 bool readRegisters(uint8_t reg, uint8_t* buffer, size_t len) {
-    if (!lockI2CBus()) {
-        return false;
-    }
-
     Wire.beginTransmission(ADXL345_I2C_ADDRESS);
     Wire.write(reg);
     if (Wire.endTransmission(false) != 0) {
-        unlockI2CBus();
         return false;
     }
 
     size_t received = Wire.requestFrom(static_cast<int>(ADXL345_I2C_ADDRESS), static_cast<int>(len), static_cast<int>(true));
     if (received != len) {
-        unlockI2CBus();
         return false;
     }
 
     for (size_t i = 0; i < len; ++i) {
         buffer[i] = Wire.read();
     }
-    unlockI2CBus();
     return true;
 }
 } // end anonymous namespace
@@ -203,13 +187,6 @@ bool MEMSSensor::begin() {
 
     INFO_PRINT("ADXL345 initialized successfully");
     return true;
-}
-uint8_t MEMSSensor::readRegister(uint8_t reg,uint8_t *value) {
-    //uint8_t value = 0;
-    if (readRegisters(reg, value, 1)) {
-        return 1;
-    }
-    return 0;
 }
 
 bool MEMSSensor::readRawData(MEMSData& data) {
