@@ -29,11 +29,17 @@ extern bool g_log_enabled;
     } \
 } while(0)
 
+#define ALWAYS_INFO_PRINT(fmt, ...) do { \
+    Serial.printf("[INFO] " fmt "\n", ##__VA_ARGS__); \
+} while(0)
+
 /* ========== DATA STRUCTURES ========== */
 
 enum WakeupReason {
     WAKE_TIMER,
     WAKE_EXT_INT,
+    WAKE_EXT_INT_MOTION,
+    WAKE_MODE_SWITCH,
     WAKE_UNKNOWN,
     WAKE_FIRST_BOOT
 };
@@ -145,6 +151,8 @@ struct SystemConfig {
     char mqtt_topic_fft_y[256];
     char mqtt_topic_fft_z[256];
     char mqtt_topic_subscribe[256];
+    char mqtt_topic_ack[256];
+    char mqtt_topic_result[256];
     uint16_t mqtt_publish_interval_s;
     
     bool mqtt_use_tls;
@@ -226,6 +234,7 @@ struct WakeupInfo {
 
 // Get wakeup reason from RTC memory or hardware
 WakeupReason get_wakeup_reason();
+const char* wakeup_reason_to_string(WakeupReason reason);
 
 // Print system information
 void print_system_info(const SystemStatus& status);

@@ -1,13 +1,32 @@
 #include "power_management.h"
 #include <driver/rtc_io.h>
 
+namespace {
+constexpr uint32_t kWakePolicyMagic = 0x574B5031UL;
+constexpr uint8_t kSuppressAfterMotionWakeCount = 5;
+constexpr uint8_t kResumeAfterTimerWakeCount = 2;
+
+struct WakePolicyRTCState {
+    uint32_t magic;
+    uint8_t motion_wakeup_streak;
+    uint8_t timer_wakeup_streak_after_suppression;
+    bool motion_wakeup_suppressed;
+};
+
+RTC_DATA_ATTR WakePolicyRTCState g_wake_policy_state = {};
+}
+
 PowerManager::PowerManager() 
     : sleep_enabled(true),
+      motion_wakeup_suppressed(false),
       sleep_enter_time_us(0) {
 }
 
-bool PowerManager::begin() {
+bool PowerManager::begin(WakeupReason last_wakeup_reason,
+                         bool adxl_interrupt_pending_at_boot) {
     INFO_PRINT("Power Manager initializing...");
+
+    updateWakePolicyOnBoot(last_wakeup_reason, adxl_interrupt_pending_at_boot);
     
     // ADXL345 interrupts are active LOW. EXT1 on ESP32 wakes on ALL_LOW, so only arm INT1.
     const gpio_num_t adxl_int1 = static_cast<gpio_num_t>(GPIO_ADXL345_INT1);
@@ -20,8 +39,7 @@ bool PowerManager::begin() {
     rtc_gpio_set_direction(adxl_int2, RTC_GPIO_MODE_INPUT_ONLY);
     rtc_gpio_pullup_en(adxl_int2);
     rtc_gpio_pulldown_dis(adxl_int2);
-    uint64_t wake_mask = (1ULL << GPIO_ADXL345_INT1);
-    esp_sleep_enable_ext1_wakeup(wake_mask, ESP_EXT1_WAKEUP_ALL_LOW);
+    configureMotionWakeup(!motion_wakeup_suppressed);
     configureModeSwitchWakeup();
     
     // Configure timer wakeup
@@ -36,8 +54,9 @@ void PowerManager::enterDeepSleep(uint32_t sleep_sec) {
         return;
     }
     
-    INFO_PRINT("Entering deep sleep for %u seconds...", sleep_sec);
+    ALWAYS_INFO_PRINT("Entering deep sleep for %u seconds...", sleep_sec);
     configureTimerWakeup(sleep_sec);
+    configureMotionWakeup(!motion_wakeup_suppressed);
     configureModeSwitchWakeup();
     
     // Turn off LED
@@ -57,6 +76,19 @@ void PowerManager::enterDeepSleep(uint32_t sleep_sec) {
 void PowerManager::configureTimerWakeup(uint32_t seconds) {
     esp_sleep_enable_timer_wakeup(seconds * 1000000ULL);
     DEBUG_PRINT("Timer wakeup configured for %u seconds", seconds);
+}
+
+void PowerManager::configureMotionWakeup(bool enabled) {
+    if (enabled) {
+        const uint64_t wake_mask = (1ULL << GPIO_ADXL345_INT1);
+        esp_sleep_enable_ext1_wakeup(wake_mask, ESP_EXT1_WAKEUP_ALL_LOW);
+        motion_wakeup_suppressed = false;
+        ALWAYS_INFO_PRINT("Motion INT wakeup enabled (Timer + INT)");
+    } else {
+        esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_EXT1);
+        motion_wakeup_suppressed = true;
+        ALWAYS_INFO_PRINT("Motion INT wakeup suppressed (Timer only)");
+    }
 }
 
 void PowerManager::configureExtIntWakeup(uint8_t pin, bool active_high) {
@@ -99,4 +131,66 @@ void PowerManager::disableSleep() {
 void PowerManager::enableSleep() {
     sleep_enabled = true;
     DEBUG_PRINT("Sleep enabled");
+}
+
+bool PowerManager::isMotionWakeupSuppressed() const {
+    return motion_wakeup_suppressed;
+}
+
+void PowerManager::updateWakePolicyOnBoot(WakeupReason last_wakeup_reason,
+                                          bool adxl_interrupt_pending_at_boot) {
+    if (g_wake_policy_state.magic != kWakePolicyMagic) {
+        g_wake_policy_state.magic = kWakePolicyMagic;
+        g_wake_policy_state.motion_wakeup_streak = 0;
+        g_wake_policy_state.timer_wakeup_streak_after_suppression = 0;
+        g_wake_policy_state.motion_wakeup_suppressed = false;
+    }
+
+    switch (last_wakeup_reason) {
+        case WAKE_EXT_INT_MOTION:
+            g_wake_policy_state.motion_wakeup_streak++;
+            g_wake_policy_state.timer_wakeup_streak_after_suppression = 0;
+            if (g_wake_policy_state.motion_wakeup_streak >= kSuppressAfterMotionWakeCount) {
+                g_wake_policy_state.motion_wakeup_suppressed = true;
+            }
+            break;
+
+        case WAKE_TIMER:
+            if (g_wake_policy_state.motion_wakeup_suppressed) {
+                if (!adxl_interrupt_pending_at_boot) {
+                    g_wake_policy_state.timer_wakeup_streak_after_suppression++;
+                    if (g_wake_policy_state.timer_wakeup_streak_after_suppression >= kResumeAfterTimerWakeCount) {
+                        g_wake_policy_state.motion_wakeup_suppressed = false;
+                        g_wake_policy_state.motion_wakeup_streak = 0;
+                        g_wake_policy_state.timer_wakeup_streak_after_suppression = 0;
+                    }
+                } else {
+                    // Timer woke the ESP32, but the ADXL345 interrupt line is still active.
+                    // Do not count this as an "idle" timer wake toward re-enabling motion wake.
+                    g_wake_policy_state.timer_wakeup_streak_after_suppression = 0;
+                }
+            } else {
+                g_wake_policy_state.motion_wakeup_streak = 0;
+                g_wake_policy_state.timer_wakeup_streak_after_suppression = 0;
+            }
+            break;
+
+        case WAKE_MODE_SWITCH:
+        case WAKE_FIRST_BOOT:
+        case WAKE_UNKNOWN:
+        case WAKE_EXT_INT:
+        default:
+            g_wake_policy_state.motion_wakeup_streak = 0;
+            g_wake_policy_state.timer_wakeup_streak_after_suppression = 0;
+            g_wake_policy_state.motion_wakeup_suppressed = false;
+            break;
+    }
+
+    motion_wakeup_suppressed = g_wake_policy_state.motion_wakeup_suppressed;
+    INFO_PRINT("Wake policy: last=%s motion_streak=%u timer_streak=%u motion_int=%s adxl_int_boot=%s",
+               wakeup_reason_to_string(last_wakeup_reason),
+               static_cast<unsigned>(g_wake_policy_state.motion_wakeup_streak),
+               static_cast<unsigned>(g_wake_policy_state.timer_wakeup_streak_after_suppression),
+               motion_wakeup_suppressed ? "suppressed" : "enabled",
+               adxl_interrupt_pending_at_boot ? "pending" : "clear");
 }

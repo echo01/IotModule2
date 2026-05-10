@@ -23,6 +23,8 @@ public:
     // Update real-time data for WebSocket
     void updateRealtimeData(const VibrationAnalysis& analysis,
                             const SystemStatus& status);
+    void noteFFTRequest();
+    bool isFFTStreamingActive() const;
     
     // Handle file upload (for config, certificates, etc.)
     void setupFileHandlers();
@@ -36,6 +38,7 @@ private:
     VibrationAnalysis latest_analysis;
     SystemStatus latest_status;
     bool has_latest_analysis;
+    uint32_t last_fft_request_ms;
     
     // Handler functions
     void handleRoot(AsyncWebServerRequest* request);

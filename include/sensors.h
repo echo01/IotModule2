@@ -19,7 +19,7 @@ public:
     bool readRawData(MEMSData& data);
     
     // Process vibration analysis
-    bool processVibrationData(const MEMSData& raw_data, VibrationAnalysis& analysis);
+    bool processVibrationData(const MEMSData& raw_data, VibrationAnalysis& analysis, bool compute_fft);
     
     // Configure sensor
     bool setDataRate(uint16_t rate_hz);
@@ -44,6 +44,7 @@ public:
     // Get latest FFT spectrum for selected axis ('x', 'y', 'z')
     bool getFFTSpectrum(char axis, float* frequency_hz, float* amplitude_mm_s,
                         uint16_t max_points, uint16_t& out_points) const;
+    void clearFFTSpectrum();
 
 private:
     uint16_t current_rate_hz;

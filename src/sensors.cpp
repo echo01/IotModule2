@@ -220,7 +220,7 @@ bool MEMSSensor::readRawData(MEMSData& data) {
     return true;
 }
 
-bool MEMSSensor::processVibrationData(const MEMSData& raw_data, VibrationAnalysis& analysis) {
+bool MEMSSensor::processVibrationData(const MEMSData& raw_data, VibrationAnalysis& analysis, bool compute_fft) {
     analysis.timestamp_us = raw_data.timestamp_us;
 
     // Calculate RMS for each axis
@@ -256,14 +256,19 @@ bool MEMSSensor::processVibrationData(const MEMSData& raw_data, VibrationAnalysi
         analysis.rms_velocity_z = 0.0f;
     }
 
-    // Perform FFT and frequency analysis only for valid signals
+    // Perform FFT only when an explicit consumer is active.
     if (valid_x) {
-        performFFT(raw_data.accel_x, raw_data.sample_count, analysis.fft_peak_freq_x, analysis.fft_power_x);
         analysis.vibration_freq_x = calculateZeroCrossFrequency(raw_data.accel_x, raw_data.sample_count, current_rate_hz);
         // Validate frequency range
         if (analysis.vibration_freq_x < g_system_config.vibration_min_freq_hz ||
             analysis.vibration_freq_x > g_system_config.vibration_max_freq_hz) {
             analysis.vibration_freq_x = 0.0f;
+        }
+        if (compute_fft) {
+            performFFT(raw_data.accel_x, raw_data.sample_count, analysis.fft_peak_freq_x, analysis.fft_power_x);
+        } else {
+            analysis.fft_peak_freq_x = 0.0f;
+            analysis.fft_power_x = 0.0f;
         }
     } else {
         analysis.fft_peak_freq_x = 0.0f;
@@ -272,11 +277,16 @@ bool MEMSSensor::processVibrationData(const MEMSData& raw_data, VibrationAnalysi
     }
 
     if (valid_y) {
-        performFFT(raw_data.accel_y, raw_data.sample_count, analysis.fft_peak_freq_y, analysis.fft_power_y);
         analysis.vibration_freq_y = calculateZeroCrossFrequency(raw_data.accel_y, raw_data.sample_count, current_rate_hz);
         if (analysis.vibration_freq_y < g_system_config.vibration_min_freq_hz ||
             analysis.vibration_freq_y > g_system_config.vibration_max_freq_hz) {
             analysis.vibration_freq_y = 0.0f;
+        }
+        if (compute_fft) {
+            performFFT(raw_data.accel_y, raw_data.sample_count, analysis.fft_peak_freq_y, analysis.fft_power_y);
+        } else {
+            analysis.fft_peak_freq_y = 0.0f;
+            analysis.fft_power_y = 0.0f;
         }
     } else {
         analysis.fft_peak_freq_y = 0.0f;
@@ -285,11 +295,16 @@ bool MEMSSensor::processVibrationData(const MEMSData& raw_data, VibrationAnalysi
     }
 
     if (valid_z) {
-        performFFT(raw_data.accel_z, raw_data.sample_count, analysis.fft_peak_freq_z, analysis.fft_power_z);
         analysis.vibration_freq_z = calculateZeroCrossFrequency(raw_data.accel_z, raw_data.sample_count, current_rate_hz);
         if (analysis.vibration_freq_z < g_system_config.vibration_min_freq_hz ||
             analysis.vibration_freq_z > g_system_config.vibration_max_freq_hz) {
             analysis.vibration_freq_z = 0.0f;
+        }
+        if (compute_fft) {
+            performFFT(raw_data.accel_z, raw_data.sample_count, analysis.fft_peak_freq_z, analysis.fft_power_z);
+        } else {
+            analysis.fft_peak_freq_z = 0.0f;
+            analysis.fft_power_z = 0.0f;
         }
     } else {
         analysis.fft_peak_freq_z = 0.0f;
@@ -297,8 +312,8 @@ bool MEMSSensor::processVibrationData(const MEMSData& raw_data, VibrationAnalysi
         analysis.vibration_freq_z = 0.0f;
     }
 
-    // Build display spectrum only for valid signals
-    if (valid_x) {
+    // Build display spectrum only when an explicit consumer is active.
+    if (compute_fft && valid_x) {
         buildDisplaySpectrum(raw_data.accel_x, raw_data.sample_count, spectrum_x);
     } else {
         for (uint16_t i = 0; i < FFT_DISPLAY_POINTS; ++i) {
@@ -306,7 +321,7 @@ bool MEMSSensor::processVibrationData(const MEMSData& raw_data, VibrationAnalysi
         }
     }
 
-    if (valid_y) {
+    if (compute_fft && valid_y) {
         buildDisplaySpectrum(raw_data.accel_y, raw_data.sample_count, spectrum_y);
     } else {
         for (uint16_t i = 0; i < FFT_DISPLAY_POINTS; ++i) {
@@ -314,7 +329,7 @@ bool MEMSSensor::processVibrationData(const MEMSData& raw_data, VibrationAnalysi
         }
     }
 
-    if (valid_z) {
+    if (compute_fft && valid_z) {
         buildDisplaySpectrum(raw_data.accel_z, raw_data.sample_count, spectrum_z);
     } else {
         for (uint16_t i = 0; i < FFT_DISPLAY_POINTS; ++i) {
@@ -642,6 +657,14 @@ bool MEMSSensor::getFFTSpectrum(char axis, float* frequency_hz, float* amplitude
 
     out_points = n;
     return true;
+}
+
+void MEMSSensor::clearFFTSpectrum() {
+    for (uint16_t i = 0; i < FFT_DISPLAY_POINTS; ++i) {
+        spectrum_x[i] = 0.0f;
+        spectrum_y[i] = 0.0f;
+        spectrum_z[i] = 0.0f;
+    }
 }
 
 BatterySensor::BatterySensor() {

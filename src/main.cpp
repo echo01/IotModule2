@@ -172,10 +172,14 @@ void mems_task(void* parameter) {
             raw_data->timestamp_us = micros();
             
             // Process vibration analysis
+            const bool compute_fft = g_web_server.isFFTStreamingActive() || g_mqtt_handler.shouldComputeFFT();
             VibrationAnalysis analysis;
-            if (g_mems_sensor.processVibrationData(*raw_data, analysis)) {
+            if (g_mems_sensor.processVibrationData(*raw_data, analysis, compute_fft)) {
                 analysis.timestamp_us = raw_data->timestamp_us;
                 sample_count++;
+                if (compute_fft && g_mqtt_handler.shouldComputeFFT()) {
+                    g_mqtt_handler.noteFFTComputationRound(analysis.timestamp_us);
+                }
                 
                 // Send to queue for MQTT processing
                 if (g_mems_data_queue) {
@@ -266,7 +270,7 @@ void mqtt_publish_task(void* parameter) {
             has_valid_analysis = (latest_analysis.timestamp_us != 0);
         }
         
-        // Publish if connected and interval elapsed
+        // Publish command-driven FFT first, then fall back to normal main payload.
         uint32_t now = millis();
         if (publish_interval_s != g_system_config.mqtt_publish_interval_s) {
             publish_interval_s = g_system_config.mqtt_publish_interval_s;
@@ -275,10 +279,23 @@ void mqtt_publish_task(void* parameter) {
         }
         g_mqtt_handler.setNextPublishDueMs(last_publish + publish_interval_ms);
 
-        if (has_valid_analysis &&
-            g_mqtt_handler.isConnected() && 
+        bool command_work_active = false;
+        bool command_work_finished = false;
+        if (g_mqtt_handler.isConnected() && !g_mqtt_handler.isTlsConnectInProgress()) {
+            command_work_active = g_mqtt_handler.hasPendingFFTWork();
+            if (command_work_active) {
+                g_mqtt_handler.publishPendingFFTIfReady();
+                command_work_finished = !g_mqtt_handler.hasPendingFFTWork();
+            }
+        }
+
+        const bool should_publish_main = has_valid_analysis &&
+            g_mqtt_handler.isConnected() &&
             !g_mqtt_handler.isTlsConnectInProgress() &&
-            (now - last_publish) >= publish_interval_ms) {
+            !g_mqtt_handler.hasPendingFFTWork() &&
+            (command_work_finished || (now - last_publish) >= publish_interval_ms);
+
+        if (should_publish_main) {
             
             // Build MQTT payload
             MQTTPayload payload = {};
@@ -287,17 +304,6 @@ void mqtt_publish_task(void* parameter) {
             payload.battery_voltage = g_system_status.battery_voltage;
             payload.wifi_rssi = g_system_status.wifi_rssi;
             payload.uptime_ms = millis();
-
-            // Attach FFT spectrum output (x/y/z) into raw arrays for MQTT payload.
-            uint16_t points_x = 0;
-            uint16_t points_y = 0;
-            uint16_t points_z = 0;
-            g_mems_sensor.getFFTSpectrum('x', payload.raw_freq_hz, payload.raw_accel_x, MQTT_FFT_POINTS, points_x);
-            g_mems_sensor.getFFTSpectrum('y', payload.raw_freq_hz, payload.raw_accel_y, MQTT_FFT_POINTS, points_y);
-            g_mems_sensor.getFFTSpectrum('z', payload.raw_freq_hz, payload.raw_accel_z, MQTT_FFT_POINTS, points_z);
-            payload.raw_sample_count = points_x;
-            if (points_y < payload.raw_sample_count) payload.raw_sample_count = points_y;
-            if (points_z < payload.raw_sample_count) payload.raw_sample_count = points_z;
             
             // Publish
             if (g_mqtt_handler.publishVibrationData(latest_analysis, payload)) {
@@ -356,6 +362,10 @@ void setup() {
     pinMode(GPIO_ADXL345_INT2, INPUT_PULLUP);
     digitalWrite(GPIO_LED_STATUS, HIGH);   // Light LED on wakeup
     digitalWrite(GPIO_MQTT_STATUS, LOW);
+
+    // Capture the raw ADXL345 interrupt line state before sensor init clears latched sources.
+    const bool adxl_interrupt_pending_at_boot =
+        (digitalRead(GPIO_ADXL345_INT1) == LOW || digitalRead(GPIO_ADXL345_INT2) == LOW);
     
     // Check debug mode
     delay(100);
@@ -369,13 +379,10 @@ void setup() {
     /* ========== WAKEUP REASON ========== */
     
     g_system_status.wakeup_reason = get_wakeup_reason();
-    const char* wakeup_str = "UNKNOWN";
-    switch (g_system_status.wakeup_reason) {
-        case WAKE_TIMER: wakeup_str = "TIMER"; break;
-        case WAKE_EXT_INT: wakeup_str = "EXT_INT"; break;
-        default: g_system_status.wakeup_reason = WAKE_FIRST_BOOT; wakeup_str = "FIRST_BOOT"; break;
+    if (g_system_status.wakeup_reason == WAKE_UNKNOWN) {
+        g_system_status.wakeup_reason = WAKE_FIRST_BOOT;
     }
-    INFO_PRINT("Wakeup reason: %s", wakeup_str);
+    INFO_PRINT("Wakeup reason: %s", wakeup_reason_to_string(g_system_status.wakeup_reason));
     
     /* ========== STORAGE INITIALIZATION ========== */
     
@@ -419,7 +426,7 @@ void setup() {
     
     /* ========== POWER MANAGEMENT ========== */
     
-    if (!g_power_manager.begin()) {
+    if (!g_power_manager.begin(g_system_status.wakeup_reason, adxl_interrupt_pending_at_boot)) {
         ERROR_PRINT("Power manager initialization failed!");
     }
     
@@ -600,7 +607,10 @@ void loop() {
     }
     
     // Enter deep sleep after at least one successful publish in normal mode.
-    if (!g_debug_mode && g_power_manager.isSleepEnabled()) {
+    if (!g_debug_mode &&
+        g_power_manager.isSleepEnabled() &&
+        !g_web_server.isFFTStreamingActive() &&
+        !g_mqtt_handler.hasPendingFFTWork()) {
         if (g_system_status.data_sent_count > last_sent_count) {
             last_sent_count = g_system_status.data_sent_count;
             INFO_PRINT("Publish completed, arming deep sleep with ADXL345 wake interrupt");

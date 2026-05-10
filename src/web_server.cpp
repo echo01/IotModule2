@@ -24,6 +24,7 @@ constexpr size_t MIN_HEAP_FOR_GENERAL_JSON = 8192;
 constexpr size_t MIN_HEAP_FOR_WS_JSON = 4096;
 constexpr uint32_t WS_CLEANUP_INTERVAL_MS = 5000;
 constexpr uint32_t MQTT_WEB_PAUSE_MS = 15000;
+constexpr uint32_t FFT_STREAM_ACTIVE_WINDOW_MS = 12000;
 
 bool hasEnoughHeap(size_t required) {
     return esp_get_free_heap_size() > (required + 4096);  // 4KB safety margin
@@ -102,7 +103,7 @@ void logConfigSummary(const char* context) {
                g_system_config.sta_subnet,
                g_system_config.sta_dns1,
                g_system_config.sta_dns2);
-    INFO_PRINT("[%s] MQTT config: PROTOCOL='%s' BROKER='%s' PORT=%u CLIENT_ID='%s' USER='%s' PASS='%s' MAIN='%s' FFT_X='%s' FFT_Y='%s' FFT_Z='%s' SUB='%s'",
+    INFO_PRINT("[%s] MQTT config: PROTOCOL='%s' BROKER='%s' PORT=%u CLIENT_ID='%s' USER='%s' PASS='%s' MAIN='%s' FFT_X='%s' FFT_Y='%s' FFT_Z='%s' SUB='%s' ACK='%s' RESULT='%s'",
                context,
                g_system_config.mqtt_use_tls ? "MQTTS" : "MQTT",
                g_system_config.mqtt_broker,
@@ -114,7 +115,9 @@ void logConfigSummary(const char* context) {
                g_system_config.mqtt_topic_fft_x,
                g_system_config.mqtt_topic_fft_y,
                g_system_config.mqtt_topic_fft_z,
-               g_system_config.mqtt_topic_subscribe);
+               g_system_config.mqtt_topic_subscribe,
+               g_system_config.mqtt_topic_ack,
+               g_system_config.mqtt_topic_result);
     log_heap_state(context);
 }
 
@@ -164,7 +167,8 @@ WebServer::WebServer()
       dashboard_mutex(xSemaphoreCreateMutex()),
       latest_analysis{},
       latest_status{},
-      has_latest_analysis(false) {
+      has_latest_analysis(false),
+      last_fft_request_ms(0) {
 }
 
 WebServer::~WebServer() {
@@ -275,6 +279,14 @@ bool WebServer::updateConfig(const String& json_config) {
     bool saved = g_storage.saveConfig(g_system_config);
     bool applied = g_wifi_handler.applyConfig(g_system_config, true);
     return saved && applied;
+}
+
+void WebServer::noteFFTRequest() {
+    last_fft_request_ms = millis();
+}
+
+bool WebServer::isFFTStreamingActive() const {
+    return static_cast<int32_t>(millis() - last_fft_request_ms) <= static_cast<int32_t>(FFT_STREAM_ACTIVE_WINDOW_MS);
 }
 
 void WebServer::updateRealtimeData(const VibrationAnalysis& analysis, const SystemStatus& status) {
@@ -420,6 +432,8 @@ void WebServer::handleGetConfig(AsyncWebServerRequest* request) {
     doc["mqtt"]["topic_fft_y"] = g_system_config.mqtt_topic_fft_y;
     doc["mqtt"]["topic_fft_z"] = g_system_config.mqtt_topic_fft_z;
     doc["mqtt"]["topic_subscribe"] = g_system_config.mqtt_topic_subscribe;
+    doc["mqtt"]["topic_ack"] = g_system_config.mqtt_topic_ack;
+    doc["mqtt"]["topic_result"] = g_system_config.mqtt_topic_result;
     doc["mqtt"]["publish_interval_s"] = g_system_config.mqtt_publish_interval_s;
     doc["mqtt"]["use_tls"] = g_system_config.mqtt_use_tls;
     doc["mqtt"]["protocol"] = g_system_config.mqtt_use_tls ? "mqtts" : "mqtt";
@@ -487,6 +501,8 @@ void WebServer::handleSetMQTTConfig(AsyncWebServerRequest* request) {
     String topic_fft_y = request->hasParam("topic_fft_y", true) ? request->getParam("topic_fft_y", true)->value() : "";
     String topic_fft_z = request->hasParam("topic_fft_z", true) ? request->getParam("topic_fft_z", true)->value() : "";
     String topic_subscribe = request->hasParam("topic_subscribe", true) ? request->getParam("topic_subscribe", true)->value() : "";
+    String topic_ack = request->hasParam("topic_ack", true) ? request->getParam("topic_ack", true)->value() : "";
+    String topic_result = request->hasParam("topic_result", true) ? request->getParam("topic_result", true)->value() : "";
     uint16_t publish_interval_s = request->hasParam("publish_interval_s", true) ? static_cast<uint16_t>(request->getParam("publish_interval_s", true)->value().toInt()) : g_system_config.mqtt_publish_interval_s;
     bool use_tls = false;
     if (request->hasParam("use_tls", true)) {
@@ -515,6 +531,8 @@ void WebServer::handleSetMQTTConfig(AsyncWebServerRequest* request) {
     strlcpy(g_system_config.mqtt_topic_fft_y, topic_fft_y.c_str(), sizeof(g_system_config.mqtt_topic_fft_y));
     strlcpy(g_system_config.mqtt_topic_fft_z, topic_fft_z.c_str(), sizeof(g_system_config.mqtt_topic_fft_z));
     strlcpy(g_system_config.mqtt_topic_subscribe, topic_subscribe.c_str(), sizeof(g_system_config.mqtt_topic_subscribe));
+    strlcpy(g_system_config.mqtt_topic_ack, topic_ack.c_str(), sizeof(g_system_config.mqtt_topic_ack));
+    strlcpy(g_system_config.mqtt_topic_result, topic_result.c_str(), sizeof(g_system_config.mqtt_topic_result));
     if (strlen(g_system_config.mqtt_topic_publish) == 0) {
         strlcpy(g_system_config.mqtt_topic_publish, "viot/vibration", sizeof(g_system_config.mqtt_topic_publish));
     }
@@ -526,6 +544,15 @@ void WebServer::handleSetMQTTConfig(AsyncWebServerRequest* request) {
     }
     if (strlen(g_system_config.mqtt_topic_fft_z) == 0) {
         strlcpy(g_system_config.mqtt_topic_fft_z, "viot/vibration/fft/z", sizeof(g_system_config.mqtt_topic_fft_z));
+    }
+    if (strlen(g_system_config.mqtt_topic_subscribe) == 0) {
+        strlcpy(g_system_config.mqtt_topic_subscribe, "viot/config", sizeof(g_system_config.mqtt_topic_subscribe));
+    }
+    if (strlen(g_system_config.mqtt_topic_ack) == 0) {
+        strlcpy(g_system_config.mqtt_topic_ack, "viot/config/ack", sizeof(g_system_config.mqtt_topic_ack));
+    }
+    if (strlen(g_system_config.mqtt_topic_result) == 0) {
+        strlcpy(g_system_config.mqtt_topic_result, "viot/config/result", sizeof(g_system_config.mqtt_topic_result));
     }
     if (publish_interval_s < 1) {
         publish_interval_s = 1;
@@ -789,6 +816,7 @@ void WebServer::handleGetDashboard(AsyncWebServerRequest* request) {
 }
 
 void WebServer::handleGetFFTSpectrum(AsyncWebServerRequest* request) {
+    noteFFTRequest();
     if (!hasEnoughHeap(MIN_HEAP_FOR_GENERAL_JSON)) {
         ERROR_PRINT("Insufficient heap for FFT spectrum: %u bytes free", esp_get_free_heap_size());
         request->send(503, "application/json", "{\"error\":\"low memory\"}");
@@ -828,6 +856,7 @@ void WebServer::handleGetFFTSpectrum(AsyncWebServerRequest* request) {
 }
 
 void WebServer::handleGetFFTSpectrumCSV(AsyncWebServerRequest* request) {
+    noteFFTRequest();
     char axis = 'x';
     if (request->hasParam("axis")) {
         String axis_str = request->getParam("axis")->value();

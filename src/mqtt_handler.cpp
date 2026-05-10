@@ -3,20 +3,57 @@
 #include <esp_heap_caps.h>
 #include <math.h>
 #include "wifi_handler.h"
+#include "sensors.h"
 
 extern WiFiHandler g_wifi_handler;
+extern MEMSSensor g_mems_sensor;
 
 namespace {
 MQTTHandler* g_active_mqtt_handler = nullptr;
+constexpr uint8_t kDefaultFFTStepHz = 10;
+constexpr uint8_t kAllowedFFTStepsHz[] = {10, 15, 20, 25, 30, 35, 40, 45, 50};
+constexpr float kCommandFFTStartHz = 10.0f;
+constexpr float kCommandFFTMaxHz = 1200.0f;
 
-void appendJsonFloat3(String& out, float value) {
+bool isAllowedFFTStepHz(uint8_t value) {
+    for (uint8_t allowed : kAllowedFFTStepsHz) {
+        if (allowed == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint8_t normalizeFFTStepHz(uint8_t value) {
+    return isAllowedFFTStepHz(value) ? value : kDefaultFFTStepHz;
+}
+
+void appendJsonFloat2(String& out, float value) {
     char buf[20];
     if (!isfinite(value)) {
-        out += "0.000";
+        out += "0.00";
         return;
     }
 
-    snprintf(buf, sizeof(buf), "%.3f", static_cast<double>(value));
+    snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(value));
+    out += buf;
+}
+
+void appendJsonAmplitude2(String& out, float value) {
+    char buf[20];
+    if (!isfinite(value)) {
+        out += "0.00";
+        return;
+    }
+
+    float clamped = value;
+    if (clamped > 99.99f) {
+        clamped = 99.99f;
+    } else if (clamped < 0.0f) {
+        clamped = 0.0f;
+    }
+
+    snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(clamped));
     out += buf;
 }
 }
@@ -28,17 +65,36 @@ MQTTHandler::MQTTHandler()
       pause_until_ms(0),
       publish_interval_s(MQTT_PUBLISH_INTERVAL_S),
       tls_connect_in_progress(false),
-      publish_summary{} {
+      publish_summary{},
+      pending_fft_axis('\0'),
+      pending_fft_rounds(0),
+      pending_fft_ready(false),
+      clear_retained_command_after_publish(false),
+      pending_fft_timestamp_us(0),
+      pending_fft_step_hz(kDefaultFFTStepHz),
+      pending_processing_ack(false),
+      command_publish_settle_until_ms(0),
+      mqtt_mutex(xSemaphoreCreateRecursiveMutex()) {
+    pending_request_id[0] = '\0';
+    last_completed_request_id[0] = '\0';
+    last_completed_axis = '\0';
+    pending_fft_points = 0;
+    pending_fft_snapshot_valid = false;
 }
 
 MQTTHandler::~MQTTHandler() {
     disconnect();
+    if (mqtt_mutex != nullptr) {
+        vSemaphoreDelete(mqtt_mutex);
+        mqtt_mutex = nullptr;
+    }
 }
 
 bool MQTTHandler::begin(WiFiClient* client, const SystemConfig& config) {
     wifi_client = client;
     this->config = config;
     g_active_mqtt_handler = this;
+    clearPendingFFTRequest();
     publish_interval_s = config.mqtt_publish_interval_s;
     publish_summary.publish_interval_s = publish_interval_s;
     publish_summary.next_publish_due_ms = millis() + (static_cast<uint32_t>(publish_interval_s) * 1000UL);
@@ -78,18 +134,25 @@ bool MQTTHandler::reconfigure(WiFiClient* client, const SystemConfig& new_config
 }
 
 bool MQTTHandler::connect() {
+    if (!lockClient(pdMS_TO_TICKS(2000))) {
+        return false;
+    }
+
     if (isPaused()) {
         current_status = MQTTSTATUS_DISCONNECTED;
+        unlockClient();
         return false;
     }
 
     if (mqtt_client.connected()) {
         current_status = MQTTSTATUS_CONNECTED;
+        unlockClient();
         return true;
     }
     
     if (strlen(config.mqtt_broker) == 0) {
         ERROR_PRINT("MQTT broker not configured");
+        unlockClient();
         return false;
     }
     
@@ -142,7 +205,7 @@ bool MQTTHandler::connect() {
             mqtt_client.subscribe(config.mqtt_topic_subscribe);
             DEBUG_PRINT("Subscribed to: %s", config.mqtt_topic_subscribe);
         }
-        
+        unlockClient();
         return true;
     } else {
         current_status = MQTTSTATUS_ERROR;
@@ -150,11 +213,15 @@ bool MQTTHandler::connect() {
         publish_summary.tls_connect_in_progress = false;
         log_heap_state("MQTT_CONNECT_FAIL");
         ERROR_PRINT("MQTT connection failed, rc=%d", mqtt_client.state());
+        unlockClient();
         return false;
     }
 }
 
 void MQTTHandler::disconnect() {
+    if (!lockClient(pdMS_TO_TICKS(2000))) {
+        return;
+    }
     mqtt_client.disconnect();
     if (wifi_client) {
         wifi_client->stop();
@@ -163,6 +230,8 @@ void MQTTHandler::disconnect() {
     tls_connect_in_progress = false;
     publish_summary.tls_connect_in_progress = false;
     current_status = MQTTSTATUS_DISCONNECTED;
+    clearPendingFFTRequest();
+    unlockClient();
 }
 
 bool MQTTHandler::isConnected() const {
@@ -191,18 +260,18 @@ bool MQTTHandler::publishVibrationData(const VibrationAnalysis& analysis,
     if (!isConnected()) {
         return false;
     }
+    if (!lockClient()) {
+        return false;
+    }
     
     String json_payload;
     if (!buildVibrationJSON(json_payload, analysis, payload)) {
         ERROR_PRINT("Failed to build vibration JSON");
+        unlockClient();
         return false;
     }
     
     const char* topic_main = (strlen(config.mqtt_topic_publish) > 0) ? config.mqtt_topic_publish : "viot/vibration";
-    const char* topic_fft_x = (strlen(config.mqtt_topic_fft_x) > 0) ? config.mqtt_topic_fft_x : "viot/vibration/fft/x";
-    const char* topic_fft_y = (strlen(config.mqtt_topic_fft_y) > 0) ? config.mqtt_topic_fft_y : "viot/vibration/fft/y";
-    const char* topic_fft_z = (strlen(config.mqtt_topic_fft_z) > 0) ? config.mqtt_topic_fft_z : "viot/vibration/fft/z";
-
     bool published = mqtt_client.publish(
         topic_main,
         (uint8_t*)json_payload.c_str(),
@@ -217,44 +286,16 @@ bool MQTTHandler::publishVibrationData(const VibrationAnalysis& analysis,
                              0,
                              0,
                              0);
-        return false;
-    }
-
-    // Publish FFT split payloads to reduce single-message size.
-    String fft_x_json, fft_y_json, fft_z_json;
-    if (!buildFFTAxisJSON(fft_x_json, payload, 'x') ||
-        !buildFFTAxisJSON(fft_y_json, payload, 'y') ||
-        !buildFFTAxisJSON(fft_z_json, payload, 'z')) {
-        ERROR_PRINT("Failed to build FFT split JSON");
-        updatePublishSummary(false,
-                             static_cast<uint16_t>(json_payload.length()),
-                             0,
-                             0,
-                             0);
-        return false;
-    }
-
-    bool ok_x = mqtt_client.publish(topic_fft_x, (uint8_t*)fft_x_json.c_str(), fft_x_json.length(), false);
-    bool ok_y = mqtt_client.publish(topic_fft_y, (uint8_t*)fft_y_json.c_str(), fft_y_json.length(), false);
-    bool ok_z = mqtt_client.publish(topic_fft_z, (uint8_t*)fft_z_json.c_str(), fft_z_json.length(), false);
-
-    if (!(ok_x && ok_y && ok_z)) {
-        ERROR_PRINT("MQTT FFT split publish failed (x=%d y=%d z=%d)", ok_x ? 1 : 0, ok_y ? 1 : 0, ok_z ? 1 : 0);
-        updatePublishSummary(false,
-                             static_cast<uint16_t>(json_payload.length()),
-                             static_cast<uint16_t>(fft_x_json.length()),
-                             static_cast<uint16_t>(fft_y_json.length()),
-                             static_cast<uint16_t>(fft_z_json.length()));
+        unlockClient();
         return false;
     }
 
     updatePublishSummary(true,
                          static_cast<uint16_t>(json_payload.length()),
-                         static_cast<uint16_t>(fft_x_json.length()),
-                         static_cast<uint16_t>(fft_y_json.length()),
-                         static_cast<uint16_t>(fft_z_json.length()));
-    DEBUG_PRINT("MQTT main+FFT payloads published (main=%uB, x=%uB, y=%uB, z=%uB)",
-                json_payload.length(), fft_x_json.length(), fft_y_json.length(), fft_z_json.length());
+                         0,
+                         0,
+                         0);
+    DEBUG_PRINT("MQTT main payload published (main=%uB)", json_payload.length());
     last_publish_time = millis();
 
     // Blink MQTT status LED briefly without tying up the CPU for long.
@@ -262,6 +303,7 @@ bool MQTTHandler::publishVibrationData(const VibrationAnalysis& analysis,
     vTaskDelay(pdMS_TO_TICKS(50));
     digitalWrite(GPIO_MQTT_STATUS, LOW);
 
+    unlockClient();
     return true;
 }
 
@@ -287,14 +329,23 @@ bool MQTTHandler::publishSystemStatus(const SystemStatus& status) {
 }
 
 bool MQTTHandler::subscribe(const String& topic) {
-    return mqtt_client.subscribe(topic.c_str());
+    if (!lockClient()) {
+        return false;
+    }
+    const bool ok = mqtt_client.subscribe(topic.c_str());
+    unlockClient();
+    return ok;
 }
 
 void MQTTHandler::loop() {
     if (!mqtt_client.connected()) {
         current_status = MQTTSTATUS_DISCONNECTED;
     } else {
+        if (!lockClient()) {
+            return;
+        }
         mqtt_client.loop();
+        unlockClient();
     }
 }
 
@@ -308,6 +359,106 @@ void MQTTHandler::setPublishInterval(uint16_t seconds) {
         publish_summary.publish_interval_s = seconds;
         DEBUG_PRINT("MQTT publish interval set to %u seconds", seconds);
     }
+}
+
+bool MQTTHandler::shouldComputeFFT() const {
+    return pending_fft_axis != '\0';
+}
+
+bool MQTTHandler::hasPendingFFTWork() const {
+    return pending_fft_axis != '\0';
+}
+
+void MQTTHandler::noteFFTComputationRound(uint64_t timestamp_us) {
+    if (pending_fft_axis == '\0' || pending_fft_ready) {
+        return;
+    }
+
+    if (pending_fft_rounds < 3) {
+        pending_fft_rounds++;
+    }
+    pending_fft_timestamp_us = timestamp_us;
+
+    if (pending_fft_rounds >= 3) {
+        if (capturePendingFFTSnapshot()) {
+            pending_fft_ready = true;
+            pending_processing_ack = true;
+            INFO_PRINT("FFT request for axis %c collected 3 samples and snapshot is ready to publish", pending_fft_axis);
+        } else {
+            ERROR_PRINT("Failed to capture FFT snapshot for axis %c", pending_fft_axis);
+        }
+    }
+}
+
+bool MQTTHandler::publishPendingFFTIfReady() {
+    if (!isConnected()) {
+        return false;
+    }
+
+    if (pending_processing_ack) {
+        pending_processing_ack = false;
+        publishCommandAck("processing", pending_fft_axis, "3_rounds_collected");
+    }
+
+    if (!pending_fft_ready || pending_fft_axis == '\0') {
+        return false;
+    }
+    if (!lockClient()) {
+        return false;
+    }
+
+    String fft_json;
+    if (!buildFFTAxisJSONFromSnapshot(fft_json, pending_fft_axis, pending_fft_timestamp_us)) {
+        ERROR_PRINT("Failed to build queued FFT JSON for axis %c", pending_fft_axis);
+        unlockClient();
+        publishCommandAck("error", pending_fft_axis, "build_result_failed");
+        return false;
+    }
+    DEBUG_PRINT("Queued FFT axis %c payload size=%u bytes step=%uHz points=%u",
+                pending_fft_axis,
+                static_cast<unsigned>(fft_json.length()),
+                static_cast<unsigned>(pending_fft_step_hz),
+                static_cast<unsigned>(pending_fft_points));
+
+    char topic_result[320];
+    buildCommandResultTopic(topic_result, sizeof(topic_result));
+
+    const char* topic_fft_axis = config.mqtt_topic_fft_x;
+    if (pending_fft_axis == 'y') {
+        topic_fft_axis = config.mqtt_topic_fft_y;
+    } else if (pending_fft_axis == 'z') {
+        topic_fft_axis = config.mqtt_topic_fft_z;
+    }
+
+    const bool published_result = mqtt_client.publish(topic_result, (uint8_t*)fft_json.c_str(), fft_json.length(), false);
+    const bool published_axis = mqtt_client.publish(topic_fft_axis, (uint8_t*)fft_json.c_str(), fft_json.length(), false);
+    if (!(published_result && published_axis)) {
+        ERROR_PRINT("Failed to publish queued FFT for axis %c (result=%d axis=%d)", pending_fft_axis, published_result ? 1 : 0, published_axis ? 1 : 0);
+        unlockClient();
+        publishCommandAck("error", pending_fft_axis, "publish_result_failed");
+        return false;
+    }
+
+    updatePublishSummary(true,
+                         publish_summary.main_size,
+                         pending_fft_axis == 'x' ? static_cast<uint16_t>(fft_json.length()) : 0,
+                         pending_fft_axis == 'y' ? static_cast<uint16_t>(fft_json.length()) : 0,
+                         pending_fft_axis == 'z' ? static_cast<uint16_t>(fft_json.length()) : 0);
+
+    if (clear_retained_command_after_publish && strlen(config.mqtt_topic_subscribe) > 0) {
+        if (!mqtt_client.publish(config.mqtt_topic_subscribe, "", true)) {
+            ERROR_PRINT("Failed to clear retained command on %s", config.mqtt_topic_subscribe);
+        }
+    }
+
+    unlockClient();
+    publishCommandAck("done", pending_fft_axis, "result_published");
+    command_publish_settle_until_ms = 0;
+    strlcpy(last_completed_request_id, pending_request_id, sizeof(last_completed_request_id));
+    last_completed_axis = pending_fft_axis;
+    INFO_PRINT("Queued FFT axis %c published successfully to result+axis topics (%u bytes)", pending_fft_axis, fft_json.length());
+    clearPendingFFTRequest();
+    return true;
 }
 
 void MQTTHandler::setNextPublishDueMs(uint32_t due_ms) {
@@ -335,10 +486,28 @@ void MQTTHandler::mqtt_callback(char* topic, byte* payload, unsigned int length)
     DEBUG_PRINT("Payload length: %u bytes", length);
     if (g_active_mqtt_handler) {
         g_active_mqtt_handler->recordSubscribeMessage(length);
+        char axis = '\0';
+        const char* payload_text = reinterpret_cast<const char*>(payload);
+        char request_id[64] = {};
+        uint8_t step_hz = kDefaultFFTStepHz;
+        if (g_active_mqtt_handler->parseFFTCommand(topic, payload_text, length, axis, step_hz, request_id, sizeof(request_id))) {
+            if (request_id[0] != '\0') {
+                if (strcmp(g_active_mqtt_handler->pending_request_id, request_id) == 0 &&
+                    g_active_mqtt_handler->pending_fft_axis == axis) {
+                    g_active_mqtt_handler->publishCommandAck("duplicate_ignored", axis, "request_in_progress");
+                    return;
+                }
+
+                if (strcmp(g_active_mqtt_handler->last_completed_request_id, request_id) == 0 &&
+                    g_active_mqtt_handler->last_completed_axis == axis) {
+                    g_active_mqtt_handler->publishCommandAck("already_done", axis, "request_completed");
+                    return;
+                }
+            }
+            strlcpy(g_active_mqtt_handler->pending_request_id, request_id, sizeof(g_active_mqtt_handler->pending_request_id));
+            g_active_mqtt_handler->queueFFTRequest(axis, step_hz, true);
+        }
     }
-    
-    // Handle incoming commands
-    // TODO: Parse and execute commands
 }
 
 bool MQTTHandler::buildVibrationJSON(String& json, const VibrationAnalysis& analysis,
@@ -360,13 +529,6 @@ bool MQTTHandler::buildVibrationJSON(String& json, const VibrationAnalysis& anal
     data["vibration_freq_x_hz"] = analysis.vibration_freq_x;
     data["vibration_freq_y_hz"] = analysis.vibration_freq_y;
     data["vibration_freq_z_hz"] = analysis.vibration_freq_z;
-
-    data["fft_peak_freq_x_hz"] = analysis.fft_peak_freq_x;
-    data["fft_peak_freq_y_hz"] = analysis.fft_peak_freq_y;
-    data["fft_peak_freq_z_hz"] = analysis.fft_peak_freq_z;
-    data["fft_power_x_db"] = analysis.fft_power_x;
-    data["fft_power_y_db"] = analysis.fft_power_y;
-    data["fft_power_z_db"] = analysis.fft_power_z;
 
     data["displacement_x_um"] = analysis.displacement_x_um;
     data["displacement_y_um"] = analysis.displacement_y_um;
@@ -415,7 +577,7 @@ bool MQTTHandler::buildFFTAxisJSON(String& json, const MQTTPayload& payload, cha
         if (i > 0) {
             json += ",";
         }
-        appendJsonFloat3(json, payload.raw_freq_hz[i]);
+        appendJsonFloat2(json, payload.raw_freq_hz[i]);
     }
 
     json += "],\"";
@@ -426,7 +588,58 @@ bool MQTTHandler::buildFFTAxisJSON(String& json, const MQTTPayload& payload, cha
         if (i > 0) {
             json += ",";
         }
-        appendJsonFloat3(json, selected[i]);
+        appendJsonAmplitude2(json, selected[i]);
+    }
+
+    json += "]}}";
+    return true;
+}
+
+bool MQTTHandler::buildFFTAxisJSONFromSnapshot(String& json, char axis, uint64_t timestamp_us) const {
+    if (!pending_fft_snapshot_valid || pending_fft_points == 0) {
+        return false;
+    }
+
+    const char axis_key = (axis == 'y' || axis == 'Y') ? 'y' : ((axis == 'z' || axis == 'Z') ? 'z' : 'x');
+    char freq_key[24];
+    char amp_key[32];
+    snprintf(freq_key, sizeof(freq_key), "%c_freq_hz", axis_key);
+    snprintf(amp_key, sizeof(amp_key), "%c_amplitude_mm_s", axis_key);
+
+    json = "";
+    json.reserve(900);
+    json += "{\"timestamp\":";
+    json += static_cast<uint32_t>(timestamp_us / 1000);
+    json += ",\"axis\":\"";
+    json += axis_key;
+    json += "\"";
+    if (pending_request_id[0] != '\0') {
+        json += ",\"request_id\":\"";
+        json += pending_request_id;
+        json += "\"";
+    }
+    json += ",\"step_hz\":";
+    json += pending_fft_step_hz;
+    json += ",\"data\":{\"";
+    json += freq_key;
+    json += "\":[";
+
+    for (uint16_t i = 0; i < pending_fft_points; ++i) {
+        if (i > 0) {
+            json += ",";
+        }
+        appendJsonFloat2(json, pending_fft_freq_hz[i]);
+    }
+
+    json += "],\"";
+    json += amp_key;
+    json += "\":[";
+
+    for (uint16_t i = 0; i < pending_fft_points; ++i) {
+        if (i > 0) {
+            json += ",";
+        }
+        appendJsonAmplitude2(json, pending_fft_amp_mm_s[i]);
     }
 
     json += "]}}";
@@ -436,14 +649,7 @@ bool MQTTHandler::buildFFTAxisJSON(String& json, const MQTTPayload& payload, cha
 bool MQTTHandler::buildStatusJSON(String& json, const SystemStatus& status) {
     StaticJsonDocument<1024> doc;
     
-    const char* wakeup_str = "UNKNOWN";
-    switch (status.wakeup_reason) {
-        case WAKE_TIMER: wakeup_str = "TIMER"; break;
-        case WAKE_EXT_INT: wakeup_str = "EXT_INT"; break;
-        default: break;
-    }
-    
-    doc["wakeup_reason"] = wakeup_str;
+    doc["wakeup_reason"] = wakeup_reason_to_string(status.wakeup_reason);
     doc["wifi_rssi"] = status.wifi_rssi;
     doc["battery_v"] = status.battery_voltage;
     doc["uptime_sec"] = status.uptime_seconds;
@@ -451,6 +657,58 @@ bool MQTTHandler::buildStatusJSON(String& json, const SystemStatus& status) {
     
     serializeJson(doc, json);
     return true;
+}
+
+bool MQTTHandler::publishCommandAck(const char* status, char axis, const char* detail) {
+    if (!isConnected()) {
+        return false;
+    }
+    if (!lockClient()) {
+        return false;
+    }
+
+    char topic_ack[320];
+    buildCommandAckTopic(topic_ack, sizeof(topic_ack));
+
+    StaticJsonDocument<256> doc;
+    doc["status"] = status ? status : "unknown";
+    if (axis == 'x' || axis == 'y' || axis == 'z') {
+        char axis_value[2] = { axis, '\0' };
+        doc["axis"] = axis_value;
+    }
+    if (pending_request_id[0] != '\0') {
+        doc["request_id"] = pending_request_id;
+    }
+    if (detail != nullptr && detail[0] != '\0') {
+        doc["detail"] = detail;
+    }
+    doc["timestamp"] = millis();
+
+    String json;
+    serializeJson(doc, json);
+    const bool ok = mqtt_client.publish(topic_ack, (uint8_t*)json.c_str(), json.length(), false);
+    unlockClient();
+    return ok;
+}
+
+void MQTTHandler::buildCommandAckTopic(char* out, size_t out_size) const {
+    if (strlen(config.mqtt_topic_ack) > 0) {
+        strlcpy(out, config.mqtt_topic_ack, out_size);
+    } else if (strlen(config.mqtt_topic_subscribe) > 0) {
+        snprintf(out, out_size, "%s/ack", config.mqtt_topic_subscribe);
+    } else {
+        strlcpy(out, "viot/cmd/ack", out_size);
+    }
+}
+
+void MQTTHandler::buildCommandResultTopic(char* out, size_t out_size) const {
+    if (strlen(config.mqtt_topic_result) > 0) {
+        strlcpy(out, config.mqtt_topic_result, out_size);
+    } else if (strlen(config.mqtt_topic_subscribe) > 0) {
+        snprintf(out, out_size, "%s/result", config.mqtt_topic_subscribe);
+    } else {
+        strlcpy(out, "viot/cmd/result", out_size);
+    }
 }
 
 void MQTTHandler::updatePublishSummary(bool success,
@@ -477,6 +735,153 @@ void MQTTHandler::recordSubscribeMessage(unsigned int length) {
     publish_summary.subscribe_receive_count++;
     publish_summary.last_subscribe_ms = millis();
     publish_summary.last_subscribe_size = static_cast<uint16_t>(length > UINT16_MAX ? UINT16_MAX : length);
+}
+
+void MQTTHandler::queueFFTRequest(char axis, uint8_t step_hz, bool clear_after_publish) {
+    if (axis != 'x' && axis != 'y' && axis != 'z') {
+        return;
+    }
+
+    pending_fft_axis = axis;
+    pending_fft_step_hz = normalizeFFTStepHz(step_hz);
+    pending_fft_rounds = 0;
+    pending_fft_ready = false;
+    clear_retained_command_after_publish = clear_after_publish;
+    pending_fft_timestamp_us = 0;
+    INFO_PRINT("Queued FFT request for axis %c (step=%uHz)", axis, pending_fft_step_hz);
+    publishCommandAck("accepted", axis, "queued_for_3_rounds");
+}
+
+void MQTTHandler::clearPendingFFTRequest() {
+    pending_fft_axis = '\0';
+    pending_fft_rounds = 0;
+    pending_fft_ready = false;
+    clear_retained_command_after_publish = false;
+    pending_fft_timestamp_us = 0;
+    pending_fft_step_hz = kDefaultFFTStepHz;
+    pending_request_id[0] = '\0';
+    pending_processing_ack = false;
+    pending_fft_points = 0;
+    pending_fft_snapshot_valid = false;
+}
+
+bool MQTTHandler::parseFFTCommand(const char* topic, const char* payload, unsigned int length, char& out_axis, uint8_t& out_step_hz, char* out_request_id, size_t out_request_id_size) const {
+    out_axis = '\0';
+    out_step_hz = kDefaultFFTStepHz;
+    if (out_request_id != nullptr && out_request_id_size > 0) {
+        out_request_id[0] = '\0';
+    }
+    if (topic == nullptr || payload == nullptr || strlen(config.mqtt_topic_subscribe) == 0) {
+        return false;
+    }
+
+    if (strcmp(topic, config.mqtt_topic_subscribe) != 0 || length == 0) {
+        return false;
+    }
+
+    String body;
+    body.reserve(length + 1);
+    for (unsigned int i = 0; i < length; ++i) {
+        body += static_cast<char>(payload[i]);
+    }
+    body.trim();
+    body.toLowerCase();
+
+    StaticJsonDocument<256> doc;
+    if (deserializeJson(doc, body) == DeserializationError::Ok) {
+        const char* action = "";
+        if (doc["action"].is<const char*>()) {
+            action = doc["action"];
+        } else if (doc["command"].is<const char*>()) {
+            action = doc["command"];
+        }
+        if (out_request_id != nullptr && out_request_id_size > 0 && doc["request_id"].is<const char*>()) {
+            strlcpy(out_request_id, doc["request_id"], out_request_id_size);
+        }
+        if (doc["step_hz"].is<int>()) {
+            out_step_hz = normalizeFFTStepHz(static_cast<uint8_t>(doc["step_hz"].as<int>()));
+        } else if (doc["resolution_hz"].is<int>()) {
+            out_step_hz = normalizeFFTStepHz(static_cast<uint8_t>(doc["resolution_hz"].as<int>()));
+        } else if (doc["step_hz"].is<const char*>()) {
+            out_step_hz = normalizeFFTStepHz(static_cast<uint8_t>(atoi(doc["step_hz"].as<const char*>())));
+        } else if (doc["resolution_hz"].is<const char*>()) {
+            out_step_hz = normalizeFFTStepHz(static_cast<uint8_t>(atoi(doc["resolution_hz"].as<const char*>())));
+        }
+        String cmd = action;
+        cmd.toLowerCase();
+        if (cmd == "fft_x") out_axis = 'x';
+        if (cmd == "fft_y") out_axis = 'y';
+        if (cmd == "fft_z") out_axis = 'z';
+    } else {
+        if (body == "fft_x") out_axis = 'x';
+        if (body == "fft_y") out_axis = 'y';
+        if (body == "fft_z") out_axis = 'z';
+    }
+
+    return out_axis != '\0';
+}
+
+bool MQTTHandler::isCommandPublishSettling() const {
+    return static_cast<int32_t>(command_publish_settle_until_ms - millis()) > 0;
+}
+
+bool MQTTHandler::lockClient(TickType_t wait_ticks) {
+    return mqtt_mutex != nullptr && xSemaphoreTakeRecursive(mqtt_mutex, wait_ticks) == pdTRUE;
+}
+
+void MQTTHandler::unlockClient() {
+    if (mqtt_mutex != nullptr) {
+        xSemaphoreGiveRecursive(mqtt_mutex);
+    }
+}
+
+bool MQTTHandler::capturePendingFFTSnapshot() {
+    if (pending_fft_axis == '\0') {
+        return false;
+    }
+
+    float source_freq_hz[MEMSSensor::FFT_DISPLAY_POINTS];
+    float source_amp_mm_s[MEMSSensor::FFT_DISPLAY_POINTS];
+    uint16_t source_points = 0;
+    if (!g_mems_sensor.getFFTSpectrum(pending_fft_axis,
+                                      source_freq_hz,
+                                      source_amp_mm_s,
+                                      MEMSSensor::FFT_DISPLAY_POINTS,
+                                      source_points)) {
+        pending_fft_points = 0;
+        pending_fft_snapshot_valid = false;
+        return false;
+    }
+
+    pending_fft_points = 0;
+    const float source_max_hz = (source_points > 0) ? source_freq_hz[source_points - 1] : 0.0f;
+
+    for (uint16_t i = 0; i < MQTT_FFT_POINTS; ++i) {
+        const float target_hz = kCommandFFTStartHz + (static_cast<float>(i) * pending_fft_step_hz);
+        pending_fft_freq_hz[i] = target_hz;
+        pending_fft_amp_mm_s[i] = 0.0f;
+
+        if (source_points == 0 || target_hz > kCommandFFTMaxHz || target_hz > source_max_hz) {
+            pending_fft_points++;
+            continue;
+        }
+
+        uint16_t best_index = 0;
+        float best_error = fabsf(source_freq_hz[0] - target_hz);
+        for (uint16_t j = 1; j < source_points; ++j) {
+            const float error = fabsf(source_freq_hz[j] - target_hz);
+            if (error < best_error) {
+                best_error = error;
+                best_index = j;
+            }
+        }
+
+        pending_fft_amp_mm_s[i] = source_amp_mm_s[best_index];
+        pending_fft_points++;
+    }
+
+    pending_fft_snapshot_valid = (pending_fft_points > 0);
+    return pending_fft_snapshot_valid;
 }
 
 /* ========== MQTT TASK ========== */

@@ -52,7 +52,9 @@
       <label>Topic FFT X</label><input name="topic_fft_x" placeholder="viot/vibration/fft/x">
       <label>Topic FFT Y</label><input name="topic_fft_y" placeholder="viot/vibration/fft/y">
       <label>Topic FFT Z</label><input name="topic_fft_z" placeholder="viot/vibration/fft/z">
-      <label>Topic Subscribe</label><input name="topic_subscribe">
+      <label>Topic Command</label><input name="topic_subscribe" placeholder="viot/config">
+      <label>Topic ACK</label><input name="topic_ack" placeholder="viot/config/ack">
+      <label>Topic Result</label><input name="topic_result" placeholder="viot/config/result">
       <label>Publish Interval (sec)</label><input name="publish_interval_s" type="number" min="1" max="3600">
       <button type="submit">Save MQTT Config</button>
     </form>
@@ -66,7 +68,7 @@ function setv(name,v){const e=f.querySelector(`[name="${name}"]`); if(e) e.value
 
 function renderSummary(c){
   const protocol = c.mqtt?.use_tls ? 'MQTTS' : 'MQTT';
-  summary.textContent = `Current ${protocol} Broker: ${c.mqtt?.broker || '-'}:${c.mqtt?.port || '-'} | Main: ${c.mqtt?.topic_publish || 'viot/vibration'} | FFT X/Y/Z: ${c.mqtt?.topic_fft_x || 'viot/vibration/fft/x'} | ${c.mqtt?.topic_fft_y || 'viot/vibration/fft/y'} | ${c.mqtt?.topic_fft_z || 'viot/vibration/fft/z'} | Interval: ${c.mqtt?.publish_interval_s || 60}s | Status: ${c.mqtt?.status || '-'}`;
+  summary.textContent = `Current ${protocol} Broker: ${c.mqtt?.broker || '-'}:${c.mqtt?.port || '-'} | Main: ${c.mqtt?.topic_publish || 'viot/vibration'} | FFT X/Y/Z: ${c.mqtt?.topic_fft_x || 'viot/vibration/fft/x'} | ${c.mqtt?.topic_fft_y || 'viot/vibration/fft/y'} | ${c.mqtt?.topic_fft_z || 'viot/vibration/fft/z'} | CMD: ${c.mqtt?.topic_subscribe || 'viot/config'} | ACK: ${c.mqtt?.topic_ack || 'viot/config/ack'} | RESULT: ${c.mqtt?.topic_result || 'viot/config/result'} | Interval: ${c.mqtt?.publish_interval_s || 60}s | Status: ${c.mqtt?.status || '-'}`;
 }
 
 function syncPortForProtocol(force=false){
@@ -89,6 +91,8 @@ fetch('/api/config').then(r=>r.json()).then(c=>{
   setv('topic_fft_y', c.mqtt?.topic_fft_y || 'viot/vibration/fft/y');
   setv('topic_fft_z', c.mqtt?.topic_fft_z || 'viot/vibration/fft/z');
   setv('topic_subscribe', c.mqtt?.topic_subscribe);
+  setv('topic_ack', c.mqtt?.topic_ack || 'viot/config/ack');
+  setv('topic_result', c.mqtt?.topic_result || 'viot/config/result');
   setv('publish_interval_s', c.mqtt?.publish_interval_s || 60);
   syncPortForProtocol(false);
   renderSummary(c);

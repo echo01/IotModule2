@@ -6,6 +6,18 @@
 bool g_debug_mode = false;
 bool g_log_enabled = true;
 
+const char* wakeup_reason_to_string(WakeupReason reason) {
+    switch (reason) {
+        case WAKE_TIMER: return "TIMER";
+        case WAKE_EXT_INT: return "EXT_INT";
+        case WAKE_EXT_INT_MOTION: return "EXT_INT_MOTION";
+        case WAKE_MODE_SWITCH: return "MODE_SWITCH";
+        case WAKE_UNKNOWN: return "UNKNOWN";
+        case WAKE_FIRST_BOOT: return "FIRST_BOOT";
+        default: return "UNKNOWN";
+    }
+}
+
 const char* wifi_status_to_string(WiFiStatus status) {
     switch (status) {
         case WIFI_INIT: return "WIFI_INIT";
@@ -24,8 +36,9 @@ WakeupReason get_wakeup_reason() {
         case ESP_SLEEP_WAKEUP_TIMER:
             return WAKE_TIMER;
         case ESP_SLEEP_WAKEUP_EXT0:
+            return WAKE_MODE_SWITCH;
         case ESP_SLEEP_WAKEUP_EXT1:
-            return WAKE_EXT_INT;
+            return WAKE_EXT_INT_MOTION;
         case ESP_SLEEP_WAKEUP_UNDEFINED:
         default:
             return WAKE_UNKNOWN;
@@ -34,14 +47,6 @@ WakeupReason get_wakeup_reason() {
 
 void print_system_info(const SystemStatus& status) {
     if (!g_debug_mode) return;
-    
-    const char* wakeup_str = "UNKNOWN";
-    switch (status.wakeup_reason) {
-        case WAKE_TIMER: wakeup_str = "TIMER"; break;
-        case WAKE_EXT_INT: wakeup_str = "EXT_INT"; break;
-        case WAKE_UNKNOWN: wakeup_str = "UNKNOWN"; break;
-        case WAKE_FIRST_BOOT: wakeup_str = "FIRST_BOOT"; break;
-    }
     
     const char* mqtt_str = "DISCONNECTED";
     switch (status.mqtt_status) {
@@ -52,7 +57,7 @@ void print_system_info(const SystemStatus& status) {
     }
     
     DEBUG_PRINT("=== SYSTEM INFO ===");
-    DEBUG_PRINT("Wakeup Reason: %s", wakeup_str);
+    DEBUG_PRINT("Wakeup Reason: %s", wakeup_reason_to_string(status.wakeup_reason));
     DEBUG_PRINT("WiFi Status: %s", wifi_status_to_string(status.wifi_status));
     DEBUG_PRINT("WiFi RSSI: %d dBm", status.wifi_rssi);
     DEBUG_PRINT("MQTT Status: %s", mqtt_str);

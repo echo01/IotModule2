@@ -230,7 +230,7 @@ void WiFiHandler::beginSTAConnectAttempt(uint32_t now) {
     if (g_debug_mode) {
         DEBUG_PRINT("Attempt %u/%u...", retry_count, WIFI_CONNECT_MAX_RETRIES);
     }
-    INFO_PRINT("Connecting to %s", config.wifi_ssid);
+    ALWAYS_INFO_PRINT("WiFi STA connecting: SSID=%s", config.wifi_ssid);
 }
 
 void WiFiHandler::applySTAIPConfig() {
@@ -283,7 +283,9 @@ void WiFiHandler::handleConnectingState(uint32_t now) {
         setStatus(WIFI_CONNECTED);
         stopAPMode();
         WiFi.mode(WIFI_STA);
-        INFO_PRINT("WiFi connected: %s", WiFi.localIP().toString().c_str());
+        ALWAYS_INFO_PRINT("WiFi STA connected: SSID=%s IP=%s",
+                          config.wifi_ssid,
+                          WiFi.localIP().toString().c_str());
         INFO_PRINT("SoftAP disabled while STA is connected (test mode)");
         log_heap_state("WIFI_STA_CONNECTED");
         return;

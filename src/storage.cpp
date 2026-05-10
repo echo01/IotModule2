@@ -161,6 +161,8 @@ SystemConfig Storage::createDefaultConfig() {
     strlcpy(config.mqtt_topic_fft_y, "viot/vibration/fft/y", sizeof(config.mqtt_topic_fft_y));
     strlcpy(config.mqtt_topic_fft_z, "viot/vibration/fft/z", sizeof(config.mqtt_topic_fft_z));
     strlcpy(config.mqtt_topic_subscribe, "viot/config", sizeof(config.mqtt_topic_subscribe));
+    strlcpy(config.mqtt_topic_ack, "viot/config/ack", sizeof(config.mqtt_topic_ack));
+    strlcpy(config.mqtt_topic_result, "viot/config/result", sizeof(config.mqtt_topic_result));
     config.mqtt_publish_interval_s = 60;
     config.mqtt_use_tls = false;
     config.mqtt_aws_iot_enabled = false;
@@ -213,6 +215,8 @@ void Storage::config_to_json(const SystemConfig& config, JsonDocument& doc) {
     doc["mqtt"]["topic_fft_y"] = config.mqtt_topic_fft_y;
     doc["mqtt"]["topic_fft_z"] = config.mqtt_topic_fft_z;
     doc["mqtt"]["topic_subscribe"] = config.mqtt_topic_subscribe;
+    doc["mqtt"]["topic_ack"] = config.mqtt_topic_ack;
+    doc["mqtt"]["topic_result"] = config.mqtt_topic_result;
     doc["mqtt"]["publish_interval_sec"] = config.mqtt_publish_interval_s;
     doc["mqtt"]["use_tls"] = config.mqtt_use_tls;
     doc["mqtt"]["aws_iot_enabled"] = config.mqtt_aws_iot_enabled;
@@ -291,6 +295,16 @@ SystemConfig Storage::json_to_config(const JsonDocument& doc) {
     if (doc["mqtt"]["topic_subscribe"])
         strlcpy(config.mqtt_topic_subscribe, doc["mqtt"]["topic_subscribe"],
                 sizeof(config.mqtt_topic_subscribe));
+    if (doc["mqtt"]["topic_ack"]) {
+        strlcpy(config.mqtt_topic_ack, doc["mqtt"]["topic_ack"], sizeof(config.mqtt_topic_ack));
+    } else {
+        strlcpy(config.mqtt_topic_ack, "viot/config/ack", sizeof(config.mqtt_topic_ack));
+    }
+    if (doc["mqtt"]["topic_result"]) {
+        strlcpy(config.mqtt_topic_result, doc["mqtt"]["topic_result"], sizeof(config.mqtt_topic_result));
+    } else {
+        strlcpy(config.mqtt_topic_result, "viot/config/result", sizeof(config.mqtt_topic_result));
+    }
 
     config.mqtt_publish_interval_s = doc["mqtt"]["publish_interval_sec"] | 60;
     config.mqtt_use_tls = doc["mqtt"]["use_tls"] | false;

@@ -10,7 +10,8 @@ public:
     PowerManager();
     
     // Initialize power management
-    bool begin();
+    bool begin(WakeupReason last_wakeup_reason = WAKE_UNKNOWN,
+               bool adxl_interrupt_pending_at_boot = false);
     
     // Enter deep sleep
     void enterDeepSleep(uint32_t sleep_sec = DEEP_SLEEP_INTERVAL_SEC);
@@ -39,8 +40,14 @@ public:
     // Enable sleep
     void enableSleep();
 
+    bool isMotionWakeupSuppressed() const;
+
 private:
+    void configureMotionWakeup(bool enabled);
+    void updateWakePolicyOnBoot(WakeupReason last_wakeup_reason,
+                                bool adxl_interrupt_pending_at_boot);
     bool sleep_enabled;
+    bool motion_wakeup_suppressed;
     uint64_t sleep_enter_time_us;
 };
 
