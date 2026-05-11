@@ -364,7 +364,7 @@ void setup() {
     digitalWrite(GPIO_MQTT_STATUS, LOW);
 
     // Capture the raw ADXL345 interrupt line state before sensor init clears latched sources.
-    const bool adxl_interrupt_pending_at_boot =
+    const bool adxl_interrupt_pending_before_sensor_init =
         (digitalRead(GPIO_ADXL345_INT1) == LOW || digitalRead(GPIO_ADXL345_INT2) == LOW);
     
     // Check debug mode
@@ -401,10 +401,12 @@ void setup() {
     
     /* ========== SENSOR INITIALIZATION ========== */
     
+    bool mems_initialized = false;
     if (!g_mems_sensor.begin()) {
         ERROR_PRINT("MEMS sensor initialization failed!");
         // Continue anyway, but in error state
     } else {
+        mems_initialized = true;
         g_mems_sensor.setDataRate(g_system_config.adxl345_rate_hz);
         g_mems_sensor.setRange(g_system_config.adxl345_range_g);
         g_mems_sensor.setOffset(g_system_config.adxl345_offset_x,
@@ -423,10 +425,23 @@ void setup() {
     }
     
     INFO_PRINT("Sensors initialized");
+
+    // Re-sample the ADXL345 interrupt line after sensor init/interrupt setup.
+    // This avoids treating a stale latched pre-boot interrupt as a fresh pending INT.
+    const bool adxl_interrupt_pending_after_sensor_init =
+        (digitalRead(GPIO_ADXL345_INT1) == LOW || digitalRead(GPIO_ADXL345_INT2) == LOW);
+    const bool adxl_interrupt_pending_for_wake_policy =
+        mems_initialized ? adxl_interrupt_pending_after_sensor_init
+                         : adxl_interrupt_pending_before_sensor_init;
+
+    INFO_PRINT("ADXL345 INT boot state: before_init=%s after_init=%s policy=%s",
+               adxl_interrupt_pending_before_sensor_init ? "pending" : "clear",
+               adxl_interrupt_pending_after_sensor_init ? "pending" : "clear",
+               adxl_interrupt_pending_for_wake_policy ? "pending" : "clear");
     
     /* ========== POWER MANAGEMENT ========== */
     
-    if (!g_power_manager.begin(g_system_status.wakeup_reason, adxl_interrupt_pending_at_boot)) {
+    if (!g_power_manager.begin(g_system_status.wakeup_reason, adxl_interrupt_pending_for_wake_policy)) {
         ERROR_PRINT("Power manager initialization failed!");
     }
     

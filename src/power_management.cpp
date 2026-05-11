@@ -6,6 +6,10 @@ constexpr uint32_t kWakePolicyMagic = 0x574B5031UL;
 constexpr uint8_t kSuppressAfterMotionWakeCount = 5;
 constexpr uint8_t kResumeAfterTimerWakeCount = 2;
 
+const char* wakePolicyStateString(bool suppressed) {
+    return suppressed ? "suppressed" : "enabled";
+}
+
 struct WakePolicyRTCState {
     uint32_t magic;
     uint8_t motion_wakeup_streak;
@@ -144,14 +148,33 @@ void PowerManager::updateWakePolicyOnBoot(WakeupReason last_wakeup_reason,
         g_wake_policy_state.motion_wakeup_streak = 0;
         g_wake_policy_state.timer_wakeup_streak_after_suppression = 0;
         g_wake_policy_state.motion_wakeup_suppressed = false;
+        INFO_PRINT("Wake policy init: rtc_state reset to defaults");
     }
+
+    const uint8_t motion_streak_before = g_wake_policy_state.motion_wakeup_streak;
+    const uint8_t timer_streak_before = g_wake_policy_state.timer_wakeup_streak_after_suppression;
+    const bool motion_suppressed_before = g_wake_policy_state.motion_wakeup_suppressed;
+
+    INFO_PRINT("Wake policy pre: last=%s motion_streak=%u/%u timer_streak=%u/%u motion_int=%s adxl_int_boot=%s",
+               wakeup_reason_to_string(last_wakeup_reason),
+               static_cast<unsigned>(motion_streak_before),
+               static_cast<unsigned>(kSuppressAfterMotionWakeCount),
+               static_cast<unsigned>(timer_streak_before),
+               static_cast<unsigned>(kResumeAfterTimerWakeCount),
+               wakePolicyStateString(motion_suppressed_before),
+               adxl_interrupt_pending_at_boot ? "pending" : "clear");
 
     switch (last_wakeup_reason) {
         case WAKE_EXT_INT_MOTION:
             g_wake_policy_state.motion_wakeup_streak++;
             g_wake_policy_state.timer_wakeup_streak_after_suppression = 0;
+            INFO_PRINT("Wake policy event: motion wake counted, INT streak -> %u/%u",
+                       static_cast<unsigned>(g_wake_policy_state.motion_wakeup_streak),
+                       static_cast<unsigned>(kSuppressAfterMotionWakeCount));
             if (g_wake_policy_state.motion_wakeup_streak >= kSuppressAfterMotionWakeCount) {
                 g_wake_policy_state.motion_wakeup_suppressed = true;
+                INFO_PRINT("Wake policy action: suppress motion INT after %u consecutive motion wakes",
+                           static_cast<unsigned>(kSuppressAfterMotionWakeCount));
             }
             break;
 
@@ -159,17 +182,29 @@ void PowerManager::updateWakePolicyOnBoot(WakeupReason last_wakeup_reason,
             if (g_wake_policy_state.motion_wakeup_suppressed) {
                 if (!adxl_interrupt_pending_at_boot) {
                     g_wake_policy_state.timer_wakeup_streak_after_suppression++;
+                    INFO_PRINT("Wake policy event: clean timer wake counted while INT suppressed, timer streak -> %u/%u",
+                               static_cast<unsigned>(g_wake_policy_state.timer_wakeup_streak_after_suppression),
+                               static_cast<unsigned>(kResumeAfterTimerWakeCount));
                     if (g_wake_policy_state.timer_wakeup_streak_after_suppression >= kResumeAfterTimerWakeCount) {
                         g_wake_policy_state.motion_wakeup_suppressed = false;
                         g_wake_policy_state.motion_wakeup_streak = 0;
                         g_wake_policy_state.timer_wakeup_streak_after_suppression = 0;
+                        INFO_PRINT("Wake policy action: re-enable motion INT after %u consecutive clean timer wakes",
+                                   static_cast<unsigned>(kResumeAfterTimerWakeCount));
                     }
                 } else {
                     // Timer woke the ESP32, but the ADXL345 interrupt line is still active.
                     // Do not count this as an "idle" timer wake toward re-enabling motion wake.
                     g_wake_policy_state.timer_wakeup_streak_after_suppression = 0;
+                    INFO_PRINT("Wake policy event: timer wake ignored for resume because ADXL345 INT is still pending");
                 }
             } else {
+                if (g_wake_policy_state.motion_wakeup_streak != 0 ||
+                    g_wake_policy_state.timer_wakeup_streak_after_suppression != 0) {
+                    INFO_PRINT("Wake policy event: timer wake broke motion INT streak, counters reset");
+                } else {
+                    INFO_PRINT("Wake policy event: timer wake while INT already enabled, counters remain idle");
+                }
                 g_wake_policy_state.motion_wakeup_streak = 0;
                 g_wake_policy_state.timer_wakeup_streak_after_suppression = 0;
             }
@@ -180,6 +215,7 @@ void PowerManager::updateWakePolicyOnBoot(WakeupReason last_wakeup_reason,
         case WAKE_UNKNOWN:
         case WAKE_EXT_INT:
         default:
+            INFO_PRINT("Wake policy event: non-motion wake reason resets wake policy counters");
             g_wake_policy_state.motion_wakeup_streak = 0;
             g_wake_policy_state.timer_wakeup_streak_after_suppression = 0;
             g_wake_policy_state.motion_wakeup_suppressed = false;
@@ -187,10 +223,12 @@ void PowerManager::updateWakePolicyOnBoot(WakeupReason last_wakeup_reason,
     }
 
     motion_wakeup_suppressed = g_wake_policy_state.motion_wakeup_suppressed;
-    INFO_PRINT("Wake policy: last=%s motion_streak=%u timer_streak=%u motion_int=%s adxl_int_boot=%s",
+    INFO_PRINT("Wake policy post: last=%s motion_streak=%u/%u timer_streak=%u/%u motion_int=%s adxl_int_boot=%s",
                wakeup_reason_to_string(last_wakeup_reason),
                static_cast<unsigned>(g_wake_policy_state.motion_wakeup_streak),
+               static_cast<unsigned>(kSuppressAfterMotionWakeCount),
                static_cast<unsigned>(g_wake_policy_state.timer_wakeup_streak_after_suppression),
-               motion_wakeup_suppressed ? "suppressed" : "enabled",
+               static_cast<unsigned>(kResumeAfterTimerWakeCount),
+               wakePolicyStateString(motion_wakeup_suppressed),
                adxl_interrupt_pending_at_boot ? "pending" : "clear");
 }
