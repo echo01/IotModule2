@@ -5,6 +5,8 @@
 /* Global debug mode flag - set based on GPIO27 */
 bool g_debug_mode = false;
 bool g_log_enabled = true;
+uint32_t g_debug_log_mask = DEBUG_LOG_ALL;
+MEMSTimingStats g_mems_timing_stats = {};
 
 const char* wakeup_reason_to_string(WakeupReason reason) {
     switch (reason) {
@@ -56,15 +58,15 @@ void print_system_info(const SystemStatus& status) {
         case MQTTSTATUS_ERROR: mqtt_str = "ERROR"; break;
     }
     
-    DEBUG_PRINT("=== SYSTEM INFO ===");
-    DEBUG_PRINT("Wakeup Reason: %s", wakeup_reason_to_string(status.wakeup_reason));
-    DEBUG_PRINT("WiFi Status: %s", wifi_status_to_string(status.wifi_status));
-    DEBUG_PRINT("WiFi RSSI: %d dBm", status.wifi_rssi);
-    DEBUG_PRINT("MQTT Status: %s", mqtt_str);
-    DEBUG_PRINT("Battery: %.2f V", status.battery_voltage);
-    DEBUG_PRINT("Uptime: %u sec", status.uptime_seconds);
-    DEBUG_PRINT("Data Sent: %u payloads", status.data_sent_count);
-    DEBUG_PRINT("====================");
+    DEBUG_SYSTEM_PRINT("=== SYSTEM INFO ===");
+    DEBUG_SYSTEM_PRINT("Wakeup Reason: %s", wakeup_reason_to_string(status.wakeup_reason));
+    DEBUG_SYSTEM_PRINT("WiFi Status: %s", wifi_status_to_string(status.wifi_status));
+    DEBUG_SYSTEM_PRINT("WiFi RSSI: %d dBm", status.wifi_rssi);
+    DEBUG_SYSTEM_PRINT("MQTT Status: %s", mqtt_str);
+    DEBUG_SYSTEM_PRINT("Battery: %.2f V", status.battery_voltage);
+    DEBUG_SYSTEM_PRINT("Uptime: %u sec", status.uptime_seconds);
+    DEBUG_SYSTEM_PRINT("Data Sent: %u payloads", status.data_sent_count);
+    DEBUG_SYSTEM_PRINT("====================");
 }
 
 SystemStatus get_system_status() {

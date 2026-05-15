@@ -58,6 +58,9 @@ public:
     void pauseForWebAccess(uint32_t duration_ms);
     bool isPaused() const;
     bool isTlsConnectInProgress() const;
+    bool hasReachedConnectFailureLimit() const;
+    uint8_t getConnectFailureCount() const;
+    void resetConnectFailureCount();
 
 private:
     PubSubClient mqtt_client;
@@ -85,6 +88,7 @@ private:
     float pending_fft_amp_mm_s[MQTT_FFT_POINTS];
     uint16_t pending_fft_points;
     bool pending_fft_snapshot_valid;
+    uint8_t connect_failure_count;
     SemaphoreHandle_t mqtt_mutex;
     
     // Callbacks

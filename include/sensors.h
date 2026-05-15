@@ -75,6 +75,9 @@ public:
     
     // Read battery voltage
     float readVoltage();
+
+    // Read multiple samples and return the average voltage
+    float readVoltageAverage(uint8_t samples, uint32_t delay_ms = 0);
     
     // Get battery percentage (0-100%)
     float getBatteryPercentage();

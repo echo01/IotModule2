@@ -53,6 +53,10 @@ public:
 
     String getAPSSID() const;
     bool shouldAttemptSTA() const;
+    bool hasReachedFailureLimit() const;
+    uint8_t getRetryCount() const;
+    void setSTASuppressed(bool suppressed);
+    bool isSTASuppressed() const;
 
 private:
     WiFiStatus current_status;
@@ -63,6 +67,7 @@ private:
     uint8_t retry_count;
     bool sta_attempt_requested;
     bool ap_started;
+    bool sta_suppressed;
     wl_status_t last_sta_reason;
 
     void setStatus(WiFiStatus status);

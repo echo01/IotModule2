@@ -74,6 +74,7 @@ MQTTHandler::MQTTHandler()
       pending_fft_step_hz(kDefaultFFTStepHz),
       pending_processing_ack(false),
       command_publish_settle_until_ms(0),
+      connect_failure_count(0),
       mqtt_mutex(xSemaphoreCreateRecursiveMutex()) {
     pending_request_id[0] = '\0';
     last_completed_request_id[0] = '\0';
@@ -146,6 +147,7 @@ bool MQTTHandler::connect() {
 
     if (mqtt_client.connected()) {
         current_status = MQTTSTATUS_CONNECTED;
+        connect_failure_count = 0;
         unlockClient();
         return true;
     }
@@ -196,6 +198,7 @@ bool MQTTHandler::connect() {
     
     if (connected) {
         current_status = MQTTSTATUS_CONNECTED;
+        connect_failure_count = 0;
         tls_connect_in_progress = false;
         publish_summary.tls_connect_in_progress = false;
         log_heap_state("MQTT_CONNECTED");
@@ -203,16 +206,22 @@ bool MQTTHandler::connect() {
         // Subscribe to command topic
         if (strlen(config.mqtt_topic_subscribe) > 0) {
             mqtt_client.subscribe(config.mqtt_topic_subscribe);
-            DEBUG_PRINT("Subscribed to: %s", config.mqtt_topic_subscribe);
+            DEBUG_MQTT_PRINT("Subscribed to: %s", config.mqtt_topic_subscribe);
         }
         unlockClient();
         return true;
     } else {
         current_status = MQTTSTATUS_ERROR;
+        if (connect_failure_count < UINT8_MAX) {
+            connect_failure_count++;
+        }
         tls_connect_in_progress = false;
         publish_summary.tls_connect_in_progress = false;
         log_heap_state("MQTT_CONNECT_FAIL");
-        ERROR_PRINT("MQTT connection failed, rc=%d", mqtt_client.state());
+        ERROR_PRINT("MQTT connection failed, rc=%d (attempt %u/%u)",
+                    mqtt_client.state(),
+                    static_cast<unsigned>(connect_failure_count),
+                    static_cast<unsigned>(MQTT_CONNECT_MAX_RETRIES));
         unlockClient();
         return false;
     }
@@ -255,6 +264,18 @@ bool MQTTHandler::isTlsConnectInProgress() const {
     return tls_connect_in_progress;
 }
 
+bool MQTTHandler::hasReachedConnectFailureLimit() const {
+    return connect_failure_count >= MQTT_CONNECT_MAX_RETRIES;
+}
+
+uint8_t MQTTHandler::getConnectFailureCount() const {
+    return connect_failure_count;
+}
+
+void MQTTHandler::resetConnectFailureCount() {
+    connect_failure_count = 0;
+}
+
 bool MQTTHandler::publishVibrationData(const VibrationAnalysis& analysis,
                                         const MQTTPayload& payload) {
     if (!isConnected()) {
@@ -295,7 +316,7 @@ bool MQTTHandler::publishVibrationData(const VibrationAnalysis& analysis,
                          0,
                          0,
                          0);
-    DEBUG_PRINT("MQTT main payload published (main=%uB)", json_payload.length());
+    DEBUG_MQTT_PRINT("MQTT main payload published (main=%uB)", json_payload.length());
     last_publish_time = millis();
 
     // Blink MQTT status LED briefly without tying up the CPU for long.
@@ -354,10 +375,10 @@ MQTTStatus MQTTHandler::getStatus() const {
 }
 
 void MQTTHandler::setPublishInterval(uint16_t seconds) {
-    if (seconds >= 30 && seconds <= 3600) {
+    if (seconds >= 1 && seconds <= 3600) {
         publish_interval_s = seconds;
         publish_summary.publish_interval_s = seconds;
-        DEBUG_PRINT("MQTT publish interval set to %u seconds", seconds);
+        DEBUG_MQTT_PRINT("MQTT publish interval set to %u seconds", seconds);
     }
 }
 
@@ -414,7 +435,7 @@ bool MQTTHandler::publishPendingFFTIfReady() {
         publishCommandAck("error", pending_fft_axis, "build_result_failed");
         return false;
     }
-    DEBUG_PRINT("Queued FFT axis %c payload size=%u bytes step=%uHz points=%u",
+    DEBUG_MQTT_PRINT("Queued FFT axis %c payload size=%u bytes step=%uHz points=%u",
                 pending_fft_axis,
                 static_cast<unsigned>(fft_json.length()),
                 static_cast<unsigned>(pending_fft_step_hz),
@@ -482,8 +503,8 @@ MQTTPublishSummary MQTTHandler::getPublishSummary() const {
 }
 
 void MQTTHandler::mqtt_callback(char* topic, byte* payload, unsigned int length) {
-    DEBUG_PRINT("MQTT message received on topic: %s", topic);
-    DEBUG_PRINT("Payload length: %u bytes", length);
+    DEBUG_MQTT_PRINT("MQTT message received on topic: %s", topic);
+    DEBUG_MQTT_PRINT("Payload length: %u bytes", length);
     if (g_active_mqtt_handler) {
         g_active_mqtt_handler->recordSubscribeMessage(length);
         char axis = '\0';
@@ -902,6 +923,7 @@ void mqtt_task(void* parameter) {
 
         // Maintain MQTT connection
         if (!g_wifi_handler.isConnected()) {
+            mqtt->resetConnectFailureCount();
             if (mqtt->isConnected()) {
                 mqtt->disconnect();
             }

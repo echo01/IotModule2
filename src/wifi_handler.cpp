@@ -1,5 +1,8 @@
 #include "wifi_handler.h"
 #include <esp_heap_caps.h>
+#include "discovery_service.h"
+
+extern DiscoveryService g_discovery_service;
 
 WiFiHandler::WiFiHandler()
     : current_status(WIFI_INIT),
@@ -9,6 +12,7 @@ WiFiHandler::WiFiHandler()
       retry_count(0),
       sta_attempt_requested(false),
       ap_started(false),
+      sta_suppressed(false),
       last_sta_reason(WL_IDLE_STATUS) {
 }
 
@@ -61,7 +65,7 @@ void WiFiHandler::loop() {
             if (WiFi.status() != WL_CONNECTED) {
                 last_sta_reason = WiFi.status();
                 if (g_debug_mode) {
-                    DEBUG_PRINT("WiFi status changed: %s", reasonToString(last_sta_reason));
+                    DEBUG_WIFI_PRINT("WiFi status changed: %s", reasonToString(last_sta_reason));
                 }
                 setStatus(AP_ONLY);
             }
@@ -92,6 +96,7 @@ void WiFiHandler::requestReconnect() {
 
 bool WiFiHandler::applyConfig(const SystemConfig& new_config, bool reconnect_sta) {
     config = new_config;
+    g_discovery_service.applyConfig(new_config);
     ensureAPRunning();
 
     if (reconnect_sta) {
@@ -186,7 +191,37 @@ String WiFiHandler::getAPSSID() const {
 }
 
 bool WiFiHandler::shouldAttemptSTA() const {
-    return strlen(config.wifi_ssid) > 0;
+    return !sta_suppressed && strlen(config.wifi_ssid) > 0;
+}
+
+bool WiFiHandler::hasReachedFailureLimit() const {
+    return getStatus() == WIFI_FAILED || retry_count >= WIFI_CONNECT_MAX_RETRIES;
+}
+
+uint8_t WiFiHandler::getRetryCount() const {
+    return retry_count;
+}
+
+void WiFiHandler::setSTASuppressed(bool suppressed) {
+    sta_suppressed = suppressed;
+
+    if (suppressed) {
+        sta_attempt_requested = false;
+        retry_count = 0;
+        connect_attempt_started_at = 0;
+        last_retry_started_at = 0;
+        last_sta_reason = WL_IDLE_STATUS;
+        WiFi.disconnect(false, true);
+        setStatus(shouldRunAPMode() ? AP_ONLY : WIFI_INIT);
+        INFO_PRINT("WiFi STA start suppressed until vibration gate opens");
+        return;
+    }
+
+    INFO_PRINT("WiFi STA suppression cleared");
+}
+
+bool WiFiHandler::isSTASuppressed() const {
+    return sta_suppressed;
 }
 
 void WiFiHandler::setStatus(WiFiStatus status) {
@@ -198,7 +233,7 @@ void WiFiHandler::setStatus(WiFiStatus status) {
     }
 
     if (g_debug_mode) {
-        DEBUG_PRINT("System state: %s", wifi_status_to_string(status));
+        DEBUG_WIFI_PRINT("System state: %s", wifi_status_to_string(status));
     }
 }
 
@@ -228,7 +263,7 @@ void WiFiHandler::beginSTAConnectAttempt(uint32_t now) {
     WiFi.begin(config.wifi_ssid, config.wifi_password);
 
     if (g_debug_mode) {
-        DEBUG_PRINT("Attempt %u/%u...", retry_count, WIFI_CONNECT_MAX_RETRIES);
+        DEBUG_WIFI_PRINT("Attempt %u/%u...", retry_count, WIFI_CONNECT_MAX_RETRIES);
     }
     ALWAYS_INFO_PRINT("WiFi STA connecting: SSID=%s", config.wifi_ssid);
 }
@@ -303,7 +338,7 @@ void WiFiHandler::handleConnectingState(uint32_t now) {
     WiFi.disconnect(false, true);
 
     if (g_debug_mode) {
-        DEBUG_PRINT("WiFi STA failure reason: %s", reasonToString(last_sta_reason));
+        DEBUG_WIFI_PRINT("WiFi STA failure reason: %s", reasonToString(last_sta_reason));
     }
 
     if (retry_count >= WIFI_CONNECT_MAX_RETRIES) {
@@ -392,6 +427,7 @@ void wifi_task(void* parameter) {
 
     while (1) {
         wifi->loop();
+        g_discovery_service.loop(*wifi);
 
         UBaseType_t watermark = uxTaskGetStackHighWaterMark(nullptr);
         if (watermark < STACK_LOW_WATERMARK_WORDS) {

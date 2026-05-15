@@ -9,6 +9,7 @@
 #include "wifi_handler.h"
 #include "sensors.h"
 #include "mqtt_handler.h"
+#include "discovery_service.h"
 
 extern Storage g_storage;
 extern WiFiHandler g_wifi_handler;
@@ -17,6 +18,8 @@ extern MQTTHandler g_mqtt_handler;
 extern WiFiClient g_wifi_client;
 extern SystemConfig g_system_config;
 extern SystemStatus g_system_status;
+extern DiscoveryService g_discovery_service;
+extern MEMSTimingStats g_mems_timing_stats;
 
 namespace {
 // Heap protection: keep modest safety margins without blocking normal WS updates.
@@ -192,6 +195,7 @@ bool WebServer::begin(uint16_t port) {
     server.on("/mqtt_setting.html", HTTP_GET, [](AsyncWebServerRequest* request) { sendSPIFFSFileWithLog(request, "/www/mqtt_setting.html", "text/html"); });
     server.on("/network_setting.html", HTTP_GET, [](AsyncWebServerRequest* request) { sendSPIFFSFileWithLog(request, "/www/network_setting.html", "text/html"); });
     server.on("/mems_setting.html", HTTP_GET, [](AsyncWebServerRequest* request) { sendSPIFFSFileWithLog(request, "/www/mems_setting.html", "text/html"); });
+    server.on("/operate_config.html", HTTP_GET, [](AsyncWebServerRequest* request) { sendSPIFFSFileWithLog(request, "/www/operate_config.html", "text/html"); });
     server.on("/system_setting.html", HTTP_GET, [](AsyncWebServerRequest* request) { sendSPIFFSFileWithLog(request, "/www/system_setting.html", "text/html"); });
     server.on("/wifi_config", HTTP_GET, [this](AsyncWebServerRequest* request) { handleWiFiConfigPage(request); });
     server.on("/wifi_ap_config", HTTP_GET, [this](AsyncWebServerRequest* request) { handleAPConfigPage(request); });
@@ -206,9 +210,11 @@ bool WebServer::begin(uint16_t port) {
     server.on("/api/network_config", HTTP_POST, [this](AsyncWebServerRequest* request) { handleSetNetworkConfig(request); });
     server.on("/api/scan_ssid", HTTP_GET, [this](AsyncWebServerRequest* request) { handleScanSSID(request); });
     server.on("/api/mems_config", HTTP_POST, [this](AsyncWebServerRequest* request) { handleSetMEMSConfig(request); });
+    server.on("/api/operate_config", HTTP_POST, [this](AsyncWebServerRequest* request) { handleSetOperateConfig(request); });
     server.on("/api/system_config", HTTP_POST, [this](AsyncWebServerRequest* request) { handleSetSystemConfig(request); });
     server.on("/api/ap_config", HTTP_POST, [this](AsyncWebServerRequest* request) { handleSetAPConfig(request); });
     server.on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* request) { handleGetStatus(request); });
+    server.on("/api/discover", HTTP_GET, [this](AsyncWebServerRequest* request) { handleGetDiscoverInfo(request); });
     server.on("/api/fft_spectrum", HTTP_GET, [this](AsyncWebServerRequest* request) { handleGetFFTSpectrum(request); });
     server.on("/api/fft_csv", HTTP_GET, [this](AsyncWebServerRequest* request) { handleGetFFTSpectrumCSV(request); });
     server.on("/api/mqtt_publish_summary", HTTP_GET, [this](AsyncWebServerRequest* request) { handleGetMQTTPublishSummary(request); });
@@ -256,7 +262,7 @@ void WebServer::stop() {
 }
 
 bool WebServer::updateConfig(const String& json_config) {
-    StaticJsonDocument<2048> doc;
+    StaticJsonDocument<2560> doc;
     DeserializationError error = deserializeJson(doc, json_config);
     if (error) {
         ERROR_PRINT("Config JSON parse failed: %s", error.c_str());
@@ -299,7 +305,7 @@ void WebServer::updateRealtimeData(const VibrationAnalysis& analysis, const Syst
     cleanupWebSocketClientsIfNeeded();
 
     if (!hasEnoughHeap(MIN_HEAP_FOR_WS_JSON)) {
-        DEBUG_PRINT("Skipping WebSocket update - insufficient heap: %u bytes", esp_get_free_heap_size());
+        DEBUG_WEB_PRINT("Skipping WebSocket update - insufficient heap: %u bytes", esp_get_free_heap_size());
         return;
     }
 
@@ -381,7 +387,7 @@ void WebServer::handleRoot(AsyncWebServerRequest* request) {
 
     String body;
     body.reserve(1024);
-    body += F("<div class='nav'><a href='/'>Dashboard</a><a href='/wifi_config'>WiFi Config</a><a href='/wifi_ap_config'>AP Config</a><a href='/fft_spectrum'>FFT</a><a href='/mqtt_log'>MQTT Log</a><a href='/factory_reset'>Factory Reset</a></div>");
+    body += F("<div class='nav'><a href='/'>Dashboard</a><a href='/wifi_config'>WiFi Config</a><a href='/wifi_ap_config'>AP Config</a><a href='/operate_config.html'>Operate Config</a><a href='/fft_spectrum'>FFT</a><a href='/mqtt_log'>MQTT Log</a><a href='/factory_reset'>Factory Reset</a></div>");
     body += F("<h1>VIOT Dashboard</h1><p>Real-time vibration monitor with AP + STA WiFi management.</p>");
     body += F("<p>AP SSID: ");
     body += g_wifi_handler.getAPSSID();
@@ -399,7 +405,7 @@ void WebServer::handleGetConfig(AsyncWebServerRequest* request) {
     ws.cleanupClients();
 
     const uint32_t heap_before = esp_get_free_heap_size();
-    DEBUG_PRINT("handleGetConfig: heap before response = %u bytes, largest=%u", heap_before, get_largest_free_block());
+    DEBUG_WEB_PRINT("handleGetConfig: heap before response = %u bytes, largest=%u", heap_before, get_largest_free_block());
 
     if (!hasEnoughHeap(MIN_HEAP_FOR_GENERAL_JSON)) {
         ERROR_PRINT("Insufficient heap for config JSON: %u bytes free", heap_before);
@@ -408,7 +414,7 @@ void WebServer::handleGetConfig(AsyncWebServerRequest* request) {
     }
 
     // Fixed-size config payload to avoid heap allocation/fragmentation during page loads.
-    StaticJsonDocument<2048> doc;
+    StaticJsonDocument<2560> doc;
     doc["wifi"]["ssid"] = g_system_config.wifi_ssid;
     doc["wifi"]["password"] = g_system_config.wifi_password;
     doc["wifi"]["ap_enabled"] = g_system_config.wifi_ap_enabled;
@@ -435,6 +441,8 @@ void WebServer::handleGetConfig(AsyncWebServerRequest* request) {
     doc["mqtt"]["topic_ack"] = g_system_config.mqtt_topic_ack;
     doc["mqtt"]["topic_result"] = g_system_config.mqtt_topic_result;
     doc["mqtt"]["publish_interval_s"] = g_system_config.mqtt_publish_interval_s;
+    doc["mqtt"]["publish_on_vibration_trigger"] = g_system_config.mqtt_publish_on_vibration_trigger;
+    doc["mqtt"]["publish_vibration_threshold_mm_s"] = g_system_config.mqtt_publish_vibration_threshold_mm_s;
     doc["mqtt"]["use_tls"] = g_system_config.mqtt_use_tls;
     doc["mqtt"]["protocol"] = g_system_config.mqtt_use_tls ? "mqtts" : "mqtt";
     doc["mqtt"]["status"] = mqttStatusToString(g_system_status.mqtt_status);
@@ -456,12 +464,29 @@ void WebServer::handleGetConfig(AsyncWebServerRequest* request) {
     doc["power"]["sleep_enabled"] = g_system_config.sleep_enabled;
     doc["power"]["sleep_interval_sec"] = g_system_config.sleep_interval_sec;
     doc["power"]["log_enabled"] = g_system_config.log_enabled;
+    doc["power"]["debug_log_mask"] = g_system_config.debug_log_mask;
+    doc["power"]["debug_logs"]["wifi"] = (g_system_config.debug_log_mask & DEBUG_LOG_WIFI) != 0;
+    doc["power"]["debug_logs"]["mqtt"] = (g_system_config.debug_log_mask & DEBUG_LOG_MQTT) != 0;
+    doc["power"]["debug_logs"]["mems"] = (g_system_config.debug_log_mask & DEBUG_LOG_MEMS) != 0;
+    doc["power"]["debug_logs"]["power"] = (g_system_config.debug_log_mask & DEBUG_LOG_POWER) != 0;
+    doc["power"]["debug_logs"]["web"] = (g_system_config.debug_log_mask & DEBUG_LOG_WEB) != 0;
+    doc["power"]["debug_logs"]["battery"] = (g_system_config.debug_log_mask & DEBUG_LOG_BATTERY) != 0;
+    doc["power"]["debug_logs"]["operate"] = (g_system_config.debug_log_mask & DEBUG_LOG_OPERATE) != 0;
+    doc["power"]["debug_logs"]["system"] = (g_system_config.debug_log_mask & DEBUG_LOG_SYSTEM) != 0;
+    doc["operate"]["publish_interval_s"] = g_system_config.mqtt_publish_interval_s;
+    doc["operate"]["wakeup_int_threshold_mg"] = g_system_config.adxl345_int_threshold_mg;
+    doc["operate"]["wakeup_int_enabled"] = g_system_config.adxl345_int_enabled;
+    doc["operate"]["wakeup_timer_sec"] = g_system_config.sleep_interval_sec;
+    doc["operate"]["publish_on_vibration_trigger"] = g_system_config.mqtt_publish_on_vibration_trigger;
+    doc["operate"]["publish_vibration_threshold_mm_s"] = g_system_config.mqtt_publish_vibration_threshold_mm_s;
+    doc["operate"]["log_enabled"] = g_system_config.log_enabled;
+    doc["operate"]["debug_log_mask"] = g_system_config.debug_log_mask;
 
     String json;
     json.reserve(measureJson(doc) + 1);
     serializeJson(doc, json);
     const uint32_t heap_after = esp_get_free_heap_size();
-    DEBUG_PRINT("handleGetConfig: heap after serialize = %u bytes (largest=%u delta=%ld, json=%uB)",
+    DEBUG_WEB_PRINT("handleGetConfig: heap after serialize = %u bytes (largest=%u delta=%ld, json=%uB)",
                 heap_after,
                 get_largest_free_block(),
                 static_cast<long>(heap_after) - static_cast<long>(heap_before),
@@ -668,7 +693,9 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     float offset_y = request->hasParam("offset_y", true) ? request->getParam("offset_y", true)->value().toFloat() : g_system_config.adxl345_offset_y;
     float offset_z = request->hasParam("offset_z", true) ? request->getParam("offset_z", true)->value().toFloat() : g_system_config.adxl345_offset_z;
     uint16_t int_threshold_mg = request->hasParam("int_threshold_mg", true) ? static_cast<uint16_t>(request->getParam("int_threshold_mg", true)->value().toInt()) : g_system_config.adxl345_int_threshold_mg;
-    bool int_enabled = !request->hasParam("int_enabled", true) || request->getParam("int_enabled", true)->value() == "1";
+    bool int_enabled = request->hasParam("int_enabled", true)
+        ? request->getParam("int_enabled", true)->value() == "1"
+        : g_system_config.adxl345_int_enabled;
     
     // Vibration parameters
     float min_rms_g = request->hasParam("min_rms_g", true) ? request->getParam("min_rms_g", true)->value().toFloat() : g_system_config.vibration_min_rms_g;
@@ -729,6 +756,83 @@ void WebServer::handleSetMEMSConfig(AsyncWebServerRequest* request) {
     request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"MEMS config applied.\"}");
 }
 
+void WebServer::handleSetOperateConfig(AsyncWebServerRequest* request) {
+    uint16_t publish_interval_s = request->hasParam("publish_interval_s", true)
+        ? static_cast<uint16_t>(request->getParam("publish_interval_s", true)->value().toInt())
+        : g_system_config.mqtt_publish_interval_s;
+    uint16_t int_threshold_mg = request->hasParam("int_threshold_mg", true)
+        ? static_cast<uint16_t>(request->getParam("int_threshold_mg", true)->value().toInt())
+        : g_system_config.adxl345_int_threshold_mg;
+    bool int_enabled = request->hasParam("int_enabled", true) &&
+                       request->getParam("int_enabled", true)->value() == "1";
+    uint32_t sleep_interval_sec = request->hasParam("sleep_interval_sec", true)
+        ? static_cast<uint32_t>(request->getParam("sleep_interval_sec", true)->value().toInt())
+        : g_system_config.sleep_interval_sec;
+    bool publish_on_vibration_trigger = request->hasParam("publish_on_vibration_trigger", true) &&
+                                        request->getParam("publish_on_vibration_trigger", true)->value() == "1";
+    float publish_vibration_threshold_mm_s = request->hasParam("publish_vibration_threshold_mm_s", true)
+        ? request->getParam("publish_vibration_threshold_mm_s", true)->value().toFloat()
+        : g_system_config.mqtt_publish_vibration_threshold_mm_s;
+    bool log_enabled = request->hasParam("log_enabled", true)
+        ? request->getParam("log_enabled", true)->value() == "1"
+        : g_system_config.log_enabled;
+    uint32_t debug_log_mask = 0;
+    if (request->hasParam("debug_log_wifi", true) && request->getParam("debug_log_wifi", true)->value() == "1") debug_log_mask |= DEBUG_LOG_WIFI;
+    if (request->hasParam("debug_log_mqtt", true) && request->getParam("debug_log_mqtt", true)->value() == "1") debug_log_mask |= DEBUG_LOG_MQTT;
+    if (request->hasParam("debug_log_mems", true) && request->getParam("debug_log_mems", true)->value() == "1") debug_log_mask |= DEBUG_LOG_MEMS;
+    if (request->hasParam("debug_log_power", true) && request->getParam("debug_log_power", true)->value() == "1") debug_log_mask |= DEBUG_LOG_POWER;
+    if (request->hasParam("debug_log_web", true) && request->getParam("debug_log_web", true)->value() == "1") debug_log_mask |= DEBUG_LOG_WEB;
+    if (request->hasParam("debug_log_battery", true) && request->getParam("debug_log_battery", true)->value() == "1") debug_log_mask |= DEBUG_LOG_BATTERY;
+    if (request->hasParam("debug_log_operate", true) && request->getParam("debug_log_operate", true)->value() == "1") debug_log_mask |= DEBUG_LOG_OPERATE;
+    if (request->hasParam("debug_log_system", true) && request->getParam("debug_log_system", true)->value() == "1") debug_log_mask |= DEBUG_LOG_SYSTEM;
+
+    if (publish_interval_s < 1) {
+        publish_interval_s = 1;
+    } else if (publish_interval_s > 3600) {
+        publish_interval_s = 3600;
+    }
+
+    if (int_threshold_mg < 1) {
+        int_threshold_mg = 1;
+    } else if (int_threshold_mg > 16000) {
+        int_threshold_mg = 16000;
+    }
+
+    if (sleep_interval_sec < 60) {
+        sleep_interval_sec = 60;
+    } else if (sleep_interval_sec > 86400) {
+        sleep_interval_sec = 86400;
+    }
+
+    if (publish_vibration_threshold_mm_s < 0.1f) {
+        publish_vibration_threshold_mm_s = 0.1f;
+    } else if (publish_vibration_threshold_mm_s > 1000.0f) {
+        publish_vibration_threshold_mm_s = 1000.0f;
+    }
+
+    g_system_config.mqtt_publish_interval_s = publish_interval_s;
+    g_system_config.adxl345_int_threshold_mg = int_threshold_mg;
+    g_system_config.adxl345_int_enabled = int_enabled;
+    g_system_config.sleep_interval_sec = sleep_interval_sec;
+    g_system_config.mqtt_publish_on_vibration_trigger = publish_on_vibration_trigger;
+    g_system_config.mqtt_publish_vibration_threshold_mm_s = publish_vibration_threshold_mm_s;
+    g_system_config.log_enabled = log_enabled;
+    g_system_config.debug_log_mask = debug_log_mask;
+
+    if (!g_storage.saveConfig(g_system_config)) {
+        request->send(500, "application/json", "{\"error\":\"save failed\"}");
+        return;
+    }
+
+    g_log_enabled = log_enabled;
+    g_debug_log_mask = debug_log_mask;
+    g_mqtt_handler.setPublishInterval(publish_interval_s);
+    g_mems_sensor.setInterruptThreshold(int_threshold_mg);
+    g_mems_sensor.setupInterrupt(GPIO_ADXL345_INT1, int_enabled);
+
+    request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Operate config applied.\"}");
+}
+
 void WebServer::handleSetSystemConfig(AsyncWebServerRequest* request) {
     const bool log_enabled = request->hasParam("log_enabled", true) &&
                              request->getParam("log_enabled", true)->value() == "1";
@@ -758,11 +862,21 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     doc["mqtt_connected"] = (g_system_status.mqtt_status == MQTTSTATUS_CONNECTED);
     doc["mqtt_status"] = mqttStatusToString(g_system_status.mqtt_status);
     doc["mqtt_broker"] = g_system_config.mqtt_broker;
+    doc["mems_timing"]["effective_sample_rate_hz"] = g_mems_timing_stats.effective_sample_rate_hz;
+    doc["mems_timing"]["target_period_us"] = g_mems_timing_stats.target_period_us;
+    doc["mems_timing"]["capture_elapsed_us"] = g_mems_timing_stats.capture_elapsed_us;
+    doc["mems_timing"]["avg_read_high_us"] = g_mems_timing_stats.avg_read_high_us;
+    doc["mems_timing"]["avg_wait_low_us"] = g_mems_timing_stats.avg_wait_low_us;
 
     String json;
     json.reserve(measureJson(doc) + 1);
     serializeJson(doc, json);
     request->send(200, "application/json", json);
+}
+
+void WebServer::handleGetDiscoverInfo(AsyncWebServerRequest* request) {
+    pauseMQTTForStaWebAccess(request, "GET_DISCOVER");
+    request->send(200, "application/json", g_discovery_service.buildDiscoveryJson(g_wifi_handler));
 }
 
 void WebServer::handleGetDashboard(AsyncWebServerRequest* request) {
@@ -808,6 +922,11 @@ void WebServer::handleGetDashboard(AsyncWebServerRequest* request) {
     doc["mqtt"]["broker"] = g_system_config.mqtt_broker;
     doc["mqtt"]["status"] = mqttStatusToString(status.mqtt_status);
     doc["ap_ip"] = g_wifi_handler.getAPIPAddress();
+    doc["mems_timing"]["effective_sample_rate_hz"] = g_mems_timing_stats.effective_sample_rate_hz;
+    doc["mems_timing"]["target_period_us"] = g_mems_timing_stats.target_period_us;
+    doc["mems_timing"]["capture_elapsed_us"] = g_mems_timing_stats.capture_elapsed_us;
+    doc["mems_timing"]["avg_read_high_us"] = g_mems_timing_stats.avg_read_high_us;
+    doc["mems_timing"]["avg_wait_low_us"] = g_mems_timing_stats.avg_wait_low_us;
 
     String json;
     json.reserve(measureJson(doc) + 1);
@@ -995,12 +1114,12 @@ void WebServer::onWsEvent(AsyncWebSocket* server,
     switch (type) {
         case WS_EVT_CONNECT:
             ws.cleanupClients();
-            DEBUG_PRINT("WebSocket client %u connected", client->id());
+            DEBUG_WEB_PRINT("WebSocket client %u connected", client->id());
             break;
         case WS_EVT_DISCONNECT:
             client->close();
             ws.cleanupClients();
-            DEBUG_PRINT("WebSocket client %u disconnected", client->id());
+            DEBUG_WEB_PRINT("WebSocket client %u disconnected", client->id());
             break;
         default:
             break;

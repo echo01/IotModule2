@@ -3,6 +3,7 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 #include <freertos/event_groups.h>
+#include <driver/gpio.h>
 #include <memory>
 #include <new>
 #include <cstring>
@@ -13,6 +14,7 @@
 #include "wifi_handler.h"
 #include "mqtt_handler.h"
 #include "web_server.h"
+#include "discovery_service.h"
 #include "power_management.h"
 #include "storage.h"
 
@@ -24,6 +26,7 @@ BatterySensor g_battery_sensor;
 WiFiHandler g_wifi_handler;
 MQTTHandler g_mqtt_handler;
 WebServer g_web_server;
+DiscoveryService g_discovery_service;
 PowerManager g_power_manager;
 Storage g_storage;
 
@@ -46,6 +49,69 @@ TaskHandle_t g_web_task_handle = nullptr;
 namespace {
 constexpr size_t stack_words(size_t bytes) {
     return (bytes + sizeof(StackType_t) - 1) / sizeof(StackType_t);
+}
+
+constexpr uint32_t NORMAL_MODE_BATTERY_WAIT_MS = 5000;
+constexpr uint8_t NORMAL_MODE_BATTERY_SAMPLES = 3;
+constexpr uint32_t NORMAL_MODE_BATTERY_SAMPLE_DELAY_MS = 50;
+bool g_network_start_deferred = false;
+volatile bool g_network_start_requested = false;
+volatile bool g_network_gate_decision_ready = false;
+volatile bool g_network_gate_triggered = false;
+volatile float g_network_gate_measured_velocity_mm_s = 0.0f;
+volatile uint8_t g_network_gate_sample_count = 0;
+volatile float g_network_gate_velocity_sum_mm_s = 0.0f;
+volatile float g_network_gate_last_sample_velocity_mm_s = 0.0f;
+
+constexpr gpio_num_t kLowPowerUnusedPins[] = {
+    GPIO_NUM_0,
+    GPIO_NUM_2,
+    GPIO_NUM_5,
+    GPIO_NUM_13,
+    GPIO_NUM_15,
+    GPIO_NUM_17,
+    GPIO_NUM_18,
+    GPIO_NUM_19,
+};
+
+void configureUnusedPinsForLowPower() {
+    // Keep GPIO6-11 unchanged because they may overlap with flash/PSRAM signals
+    // depending on module and board wiring.
+    for (gpio_num_t pin : kLowPowerUnusedPins) {
+        gpio_reset_pin(pin);
+        pinMode(static_cast<uint8_t>(pin), INPUT_PULLDOWN);
+    }
+
+    // GPIO16 drives an external active-low LED on this board setup.
+    gpio_reset_pin(GPIO_NUM_16);
+    pinMode(GPIO_NUM_16, OUTPUT);
+    digitalWrite(GPIO_NUM_16, HIGH);
+
+    INFO_PRINT("Low-power GPIO state applied to unused pins: 0,2,5,13,15,17,18,19");
+    INFO_PRINT("GPIO16 forced HIGH to keep LED off");
+    INFO_PRINT("Reserved-risk pins left unchanged: 6,7,8,9,10,11");
+}
+
+float maxAxisVelocityMmS(const VibrationAnalysis& analysis) {
+    float max_velocity = analysis.rms_velocity_x;
+    if (analysis.rms_velocity_y > max_velocity) {
+        max_velocity = analysis.rms_velocity_y;
+    }
+    if (analysis.rms_velocity_z > max_velocity) {
+        max_velocity = analysis.rms_velocity_z;
+    }
+    return max_velocity;
+}
+
+bool isVibrationTriggeredNetworkModeActive() {
+    return g_network_start_deferred &&
+           !g_debug_mode &&
+           g_system_config.mqtt_publish_on_vibration_trigger;
+}
+
+bool isVibrationTriggeredLoggingEnabled() {
+    return g_system_config.mqtt_publish_on_vibration_trigger &&
+           (g_system_status.wakeup_reason == WAKE_EXT_INT_MOTION || g_debug_mode);
 }
 
 StaticQueue_t g_mems_queue_struct;
@@ -149,7 +215,7 @@ void mems_task(void* parameter) {
     
     while (1) {
         if (g_mqtt_handler.isTlsConnectInProgress()) {
-            DEBUG_PRINT("MEMS task paused during MQTTS connect mode");
+            DEBUG_MEMS_PRINT("MEMS task paused during MQTTS connect mode");
             vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000));
             continue;
         }
@@ -180,6 +246,55 @@ void mems_task(void* parameter) {
                 if (compute_fft && g_mqtt_handler.shouldComputeFFT()) {
                     g_mqtt_handler.noteFFTComputationRound(analysis.timestamp_us);
                 }
+
+                if (isVibrationTriggeredLoggingEnabled() &&
+                    (!g_network_gate_decision_ready || g_debug_mode)) {
+                    const float max_velocity_mm_s = maxAxisVelocityMmS(analysis);
+                    g_network_gate_last_sample_velocity_mm_s = max_velocity_mm_s;
+
+                    if (g_network_gate_sample_count == 0) {
+                        g_network_gate_sample_count = 1;
+                        DEBUG_OPERATE_PRINT("Vibration trigger sample 1/4 ignored for settling: %.2f mm/s",
+                                            max_velocity_mm_s);
+                    } else {
+                        if (g_network_gate_sample_count < 4) {
+                            g_network_gate_velocity_sum_mm_s += max_velocity_mm_s;
+                            g_network_gate_sample_count++;
+                            DEBUG_OPERATE_PRINT("Vibration trigger sample %u/4 used: %.2f mm/s",
+                                                static_cast<unsigned>(g_network_gate_sample_count),
+                                                max_velocity_mm_s);
+                        }
+
+                        if (g_network_gate_sample_count >= 4) {
+                            g_network_gate_measured_velocity_mm_s = g_network_gate_velocity_sum_mm_s / 3.0f;
+                            g_network_gate_triggered =
+                                g_network_gate_measured_velocity_mm_s >= g_system_config.mqtt_publish_vibration_threshold_mm_s;
+                            g_network_gate_decision_ready = true;
+                            if (g_network_gate_triggered) {
+                                if (!g_debug_mode) {
+                                    g_network_start_requested = true;
+                                }
+                                DEBUG_OPERATE_PRINT("Vibration trigger matched after averaging 3 samples: %.2f mm/s >= threshold %.2f mm/s%s",
+                                                    g_network_gate_measured_velocity_mm_s,
+                                                    g_system_config.mqtt_publish_vibration_threshold_mm_s,
+                                                    g_debug_mode ? " [debug monitor only]" : "");
+                            } else {
+                                DEBUG_OPERATE_PRINT("Vibration trigger not met after averaging 3 samples: %.2f mm/s < threshold %.2f mm/s%s",
+                                                    g_network_gate_measured_velocity_mm_s,
+                                                    g_system_config.mqtt_publish_vibration_threshold_mm_s,
+                                                    g_debug_mode ? " [debug monitor only]" : "");
+                            }
+
+                            if (g_debug_mode) {
+                                g_network_gate_sample_count = 0;
+                                g_network_gate_velocity_sum_mm_s = 0.0f;
+                                g_network_gate_last_sample_velocity_mm_s = 0.0f;
+                                g_network_gate_decision_ready = false;
+                                g_network_gate_triggered = false;
+                            }
+                        }
+                    }
+                }
                 
                 // Send to queue for MQTT processing
                 if (g_mems_data_queue) {
@@ -205,7 +320,7 @@ void mems_task(void* parameter) {
                 }
                 
                 if (g_debug_mode && (sample_count % 10 == 0)) {
-                    DEBUG_PRINT("MEMS samples: %u", sample_count);
+                    DEBUG_MEMS_PRINT("MEMS samples: %u", sample_count);
                 }
             }
         }
@@ -232,7 +347,7 @@ void adc_task(void* parameter) {
         g_system_status.battery_voltage = g_battery_sensor.readVoltage();
         
         // Check low battery
-        if (g_battery_sensor.isBatteryLow()) {
+        if (g_system_status.battery_voltage < BATTERY_LOW_THRESHOLD_V) {
             if (g_debug_mode) {
                 ERROR_PRINT("Low battery warning: %.2f V", g_system_status.battery_voltage);
             }
@@ -240,7 +355,7 @@ void adc_task(void* parameter) {
 
         log_stack_watermark("ADC");
         
-        // Update every 30 seconds
+        // Update every 30 seconds in debug mode.
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(30000));
     }
     
@@ -312,7 +427,7 @@ void mqtt_publish_task(void* parameter) {
                 g_system_status.data_sent_count++;
                 
                 if (g_debug_mode) {
-                    DEBUG_PRINT("MQTT published, count: %u", g_system_status.data_sent_count);
+                    DEBUG_MQTT_PRINT("MQTT published, count: %u", g_system_status.data_sent_count);
                 }
             }
         }
@@ -374,6 +489,7 @@ void setup() {
         INFO_PRINT("DEBUG MODE ENABLED (GPIO27 = HIGH)");
     } else {
         INFO_PRINT("NORMAL MODE (GPIO27 = LOW)");
+        configureUnusedPinsForLowPower();
     }
     
     /* ========== WAKEUP REASON ========== */
@@ -397,7 +513,9 @@ void setup() {
         g_system_config = Storage::createDefaultConfig();
     }
     g_log_enabled = g_system_config.log_enabled;
+    g_debug_log_mask = g_system_config.debug_log_mask;
     print_runtime_config_debug();
+    g_system_status = get_system_status();
     
     /* ========== SENSOR INITIALIZATION ========== */
     
@@ -422,6 +540,43 @@ void setup() {
     
     if (!g_battery_sensor.begin()) {
         ERROR_PRINT("Battery sensor initialization failed!");
+    }
+
+    if (!g_debug_mode) {
+        const uint32_t setup_elapsed_ms = millis();
+        if (setup_elapsed_ms < NORMAL_MODE_BATTERY_WAIT_MS) {
+            const uint32_t wait_ms = NORMAL_MODE_BATTERY_WAIT_MS - setup_elapsed_ms;
+            INFO_PRINT("Normal mode: waiting %u ms before battery sampling", wait_ms);
+            delay(wait_ms);
+        }
+
+        g_system_status.battery_voltage = g_battery_sensor.readVoltageAverage(
+            NORMAL_MODE_BATTERY_SAMPLES,
+            NORMAL_MODE_BATTERY_SAMPLE_DELAY_MS);
+        INFO_PRINT("Normal mode battery sample ready: %.2f V", g_system_status.battery_voltage);
+    } else {
+        g_system_status.battery_voltage = g_battery_sensor.readVoltage();
+    }
+
+    g_network_start_deferred =
+        !g_debug_mode &&
+        g_system_config.mqtt_publish_on_vibration_trigger &&
+        g_system_status.wakeup_reason == WAKE_EXT_INT_MOTION;
+    g_network_start_requested = false;
+    g_network_gate_decision_ready = false;
+    g_network_gate_triggered = false;
+    g_network_gate_measured_velocity_mm_s = 0.0f;
+    g_network_gate_sample_count = 0;
+    g_network_gate_velocity_sum_mm_s = 0.0f;
+    g_network_gate_last_sample_velocity_mm_s = 0.0f;
+    if (g_network_start_deferred) {
+        INFO_PRINT("Normal mode motion-wake vibration gate armed: ignore first MEMS frame, average the next 3 max-axis velocity samples, then compare against %.2f mm/s",
+                   g_system_config.mqtt_publish_vibration_threshold_mm_s);
+    } else if (g_debug_mode && g_system_config.mqtt_publish_on_vibration_trigger) {
+        INFO_PRINT("Debug mode vibration trigger monitor armed: ignore first MEMS frame, average the next 3 max-axis velocity samples, and print the threshold result without changing WiFi/MQTT state");
+    } else if (!g_debug_mode && g_system_config.mqtt_publish_on_vibration_trigger) {
+        INFO_PRINT("Vibration trigger mode configured, but wake reason is %s so WiFi/MQTT will start immediately without threshold gating",
+                   wakeup_reason_to_string(g_system_status.wakeup_reason));
     }
     
     INFO_PRINT("Sensors initialized");
@@ -479,6 +634,9 @@ void setup() {
     if (!g_wifi_handler.begin(g_system_config)) {
         ERROR_PRINT("WiFi initialization failed!");
     }
+    if (g_network_start_deferred) {
+        g_wifi_handler.setSTASuppressed(true);
+    }
     
     /* ========== MQTT INITIALIZATION ========== */
     
@@ -491,6 +649,10 @@ void setup() {
     g_web_server.setupFileHandlers();
     if (!g_web_server.begin(WEB_SERVER_PORT)) {
         ERROR_PRINT("Web server initialization failed!");
+    }
+
+    if (!g_discovery_service.begin(g_system_config)) {
+        ERROR_PRINT("Discovery service initialization failed!");
     }
     
     INFO_PRINT("Web server available at http://%s", g_wifi_handler.getIPAddress().c_str());
@@ -508,17 +670,19 @@ void setup() {
         MEMS_TASK_CORE
     );
     
-    // ADC battery monitor task
-    g_adc_task_handle = xTaskCreateStaticPinnedToCore(
-        adc_task,
-        "ADC",
-        ADC_TASK_STACK_SIZE,
-        nullptr,
-        ADC_TASK_PRIORITY,
-        g_adc_task_stack,
-        &g_adc_task_buffer,
-        ADC_TASK_CORE
-    );
+    // ADC battery monitor task is only needed in debug mode.
+    if (g_debug_mode) {
+        g_adc_task_handle = xTaskCreateStaticPinnedToCore(
+            adc_task,
+            "ADC",
+            ADC_TASK_STACK_SIZE,
+            nullptr,
+            ADC_TASK_PRIORITY,
+            g_adc_task_stack,
+            &g_adc_task_buffer,
+            ADC_TASK_CORE
+        );
+    }
     
     // WiFi handler task
     xTaskCreatePinnedToCore(
@@ -581,6 +745,7 @@ void loop() {
     static uint32_t last_mode_check = 0;
     static uint32_t last_sent_count = 0;
     static uint32_t last_stack_log = 0;
+    static bool sleep_requested_due_to_failure = false;
     uint32_t now = millis();
     
     // Check mode switch periodically (every 5 seconds)
@@ -605,7 +770,7 @@ void loop() {
         (digitalRead(GPIO_ADXL345_INT1) == LOW || digitalRead(GPIO_ADXL345_INT2) == LOW)) {
         uint8_t int_source = 0;
         if (g_mems_sensor.clearInterruptSource(&int_source)) {
-            DEBUG_PRINT("ADXL345 interrupt cleared from INT_SOURCE=0x%02X", int_source);
+            //DEBUG_OPERATE_PRINT("ADXL345 interrupt cleared from INT_SOURCE=0x%02X", int_source);
         }
     }
     
@@ -620,6 +785,28 @@ void loop() {
         }
         xEventGroupClearBits(g_event_group, EVENT_MEMS_DATA_READY);
     }
+
+    if (isVibrationTriggeredNetworkModeActive()) {
+        if (g_network_start_requested && g_wifi_handler.isSTASuppressed()) {
+            INFO_PRINT("Opening WiFi/MQTT flow after vibration trigger (%.2f mm/s)",
+                       static_cast<double>(g_network_gate_measured_velocity_mm_s));
+            g_network_start_deferred = false;
+            g_wifi_handler.setSTASuppressed(false);
+            g_wifi_handler.requestReconnect();
+            g_mqtt_handler.resetConnectFailureCount();
+            sleep_requested_due_to_failure = false;
+        } else if (g_network_gate_decision_ready &&
+                   !g_network_gate_triggered &&
+                   g_wifi_handler.isSTASuppressed() &&
+                   !sleep_requested_due_to_failure) {
+            sleep_requested_due_to_failure = true;
+            INFO_PRINT("Vibration trigger not met (%.2f mm/s < %.2f mm/s), returning to deep sleep without starting WiFi",
+                       static_cast<double>(g_network_gate_measured_velocity_mm_s),
+                       static_cast<double>(g_system_config.mqtt_publish_vibration_threshold_mm_s));
+            g_network_start_deferred = false;
+            g_power_manager.enterDeepSleep(g_system_config.sleep_interval_sec);
+        }
+    }
     
     // Enter deep sleep after at least one successful publish in normal mode.
     if (!g_debug_mode &&
@@ -628,8 +815,31 @@ void loop() {
         !g_mqtt_handler.hasPendingFFTWork()) {
         if (g_system_status.data_sent_count > last_sent_count) {
             last_sent_count = g_system_status.data_sent_count;
+            sleep_requested_due_to_failure = false;
             INFO_PRINT("Publish completed, arming deep sleep with ADXL345 wake interrupt");
             g_power_manager.enterDeepSleep(g_system_config.sleep_interval_sec);
+        } else if (!sleep_requested_due_to_failure) {
+            const bool wifi_failure_exhausted =
+                g_wifi_handler.shouldAttemptSTA() &&
+                g_wifi_handler.hasReachedFailureLimit();
+            const bool mqtt_failure_exhausted =
+                g_wifi_handler.isConnected() &&
+                !g_mqtt_handler.isConnected() &&
+                g_mqtt_handler.hasReachedConnectFailureLimit();
+
+            if (wifi_failure_exhausted) {
+                sleep_requested_due_to_failure = true;
+                ERROR_PRINT("WiFi STA failed after %u/%u attempts, entering deep sleep without publish",
+                            static_cast<unsigned>(g_wifi_handler.getRetryCount()),
+                            static_cast<unsigned>(WIFI_CONNECT_MAX_RETRIES));
+                g_power_manager.enterDeepSleep(g_system_config.sleep_interval_sec);
+            } else if (mqtt_failure_exhausted) {
+                sleep_requested_due_to_failure = true;
+                ERROR_PRINT("MQTT broker connect failed after %u/%u attempts, entering deep sleep without publish",
+                            static_cast<unsigned>(g_mqtt_handler.getConnectFailureCount()),
+                            static_cast<unsigned>(MQTT_CONNECT_MAX_RETRIES));
+                g_power_manager.enterDeepSleep(g_system_config.sleep_interval_sec);
+            }
         }
     }
 

@@ -25,6 +25,7 @@
       <a href="/fft_chart.html">FFT Chart</a>
       <a href="/mqtt_setting.html">MQTT Config</a>
       <a href="/network_setting.html">Network Config</a>
+      <a href="/operate_config.html">Operate Config</a>
       <a href="/mems_setting.html">MEMS Config</a>
       <a href="/system_setting.html">System</a>
     </div>
@@ -32,12 +33,13 @@
 
   <div class="wrap"><div class="card">
     <form id="f">
-      <label>Sample Output Rate (Hz)</label>
-      <select name="rate_hz">
-        <option value="1600">1600 Hz</option>
+      <label>Measurement Bandwidth (Hz)</label>
+      <select name="bandwidth_hz">
         <option value="800">800 Hz</option>
         <option value="400">400 Hz</option>
+        <option value="200">200 Hz</option>
       </select>
+      <div class="msg">ADXL345 output data rate is internally set to 2x the selected bandwidth.</div>
       <label>Range (G)</label>
       <select name="range_g"><option value="2">2G</option><option value="4">4G</option><option value="8">8G</option><option value="16">16G</option></select>
 
@@ -47,12 +49,6 @@
         <div><label>Y Offset</label><input type="number" step="0.001" name="offset_y"></div>
         <div><label>Z Offset</label><input type="number" step="0.001" name="offset_z"></div>
       </div>
-
-      <label>Interrupt Threshold (mg)</label><input type="number" name="int_threshold_mg" min="1" max="16000">
-      <label>Enable ADXL345 Interrupt <input type="checkbox" id="int_enabled" checked></label>
-
-      <label>Wakeup Timer (seconds)</label>
-      <input type="number" name="sleep_interval_sec" min="60" max="86400">
       <button type="submit">Save MEMS Config</button>
     </form>
     <div class="msg" id="msg"></div>
@@ -60,21 +56,34 @@
 <script>
 const f=document.getElementById('f'); const msg=document.getElementById('msg');
 function setv(name,v){const e=f.querySelector(`[name="${name}"]`); if(e) e.value=v??'';}
+function rateToBandwidth(rateHz){
+  const rate = Number(rateHz) || 800;
+  if (rate <= 400) return 200;
+  if (rate <= 800) return 400;
+  return 800;
+}
+function bandwidthToRate(bandwidthHz){
+  const bandwidth = Number(bandwidthHz) || 400;
+  if (bandwidth <= 200) return 400;
+  if (bandwidth <= 400) return 800;
+  return 1600;
+}
 fetch('/api/config').then(r=>r.json()).then(c=>{
-  setv('rate_hz', c.adxl345?.rate_hz || 1600);
+  setv('bandwidth_hz', rateToBandwidth(c.adxl345?.rate_hz || 800));
   setv('range_g', c.adxl345?.range_g || 16);
   setv('offset_x', c.adxl345?.offset_x || 0);
   setv('offset_y', c.adxl345?.offset_y || 0);
   setv('offset_z', c.adxl345?.offset_z || 0);
-  setv('int_threshold_mg', c.adxl345?.int_threshold_mg || 250);
-  setv('sleep_interval_sec', c.power?.sleep_interval_sec || 3600);
-  document.getElementById('int_enabled').checked = c.adxl345?.int_enabled !== false;
 }).catch(()=>{});
 
 f.onsubmit=async (e)=>{
   e.preventDefault();
-  const fd=new FormData(f);
-  fd.append('int_enabled', document.getElementById('int_enabled').checked ? '1' : '0');
+  const fd=new FormData();
+  fd.append('rate_hz', String(bandwidthToRate(f.bandwidth_hz.value)));
+  fd.append('range_g', f.range_g.value);
+  fd.append('offset_x', f.offset_x.value);
+  fd.append('offset_y', f.offset_y.value);
+  fd.append('offset_z', f.offset_z.value);
   const res=await fetch('/api/mems_config',{method:'POST',body:fd});
   const t=await res.text();
   msg.textContent = res.ok ? 'MEMS config saved and applied.' : `Save failed: ${t}`;

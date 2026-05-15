@@ -74,7 +74,7 @@ bool validateVibrationSignal(const float* data, uint32_t count, float filtered_r
                  (peak_g >= g_system_config.vibration_min_peak_g);
 
     if (g_debug_mode) {
-        DEBUG_PRINT("Signal validation: RMS=%.4fG Peak=%.4fG Valid=%s (min_rms=%.4fG min_peak=%.4fG)",
+        DEBUG_MEMS_PRINT("Signal validation: RMS=%.4fG Peak=%.4fG Valid=%s (min_rms=%.4fG min_peak=%.4fG)",
                    filtered_rms_g, peak_g, valid ? "YES" : "NO",
                    g_system_config.vibration_min_rms_g, g_system_config.vibration_min_peak_g);
     }
@@ -168,6 +168,8 @@ MEMSSensor::~MEMSSensor() {
 
 bool MEMSSensor::begin() {
     Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, static_cast<uint32_t>(I2C_FREQUENCY));
+    pinMode(GPIO_DEBUG_SAMPLE_PULSE, OUTPUT);
+    digitalWrite(GPIO_DEBUG_SAMPLE_PULSE, LOW);
 
     uint8_t devid = 0;
     if (!readRegisters(REG_DEVID, &devid, 1) || devid != DEVID_ADXL345) {
@@ -195,9 +197,23 @@ bool MEMSSensor::readRawData(MEMSData& data) {
 
     uint8_t raw[6];
     const float scale_g_per_lsb = 0.00390625f;  // Full resolution mode (approx. 3.9 mg/LSB)
+    const uint32_t target_period_us = (current_rate_hz > 0)
+        ? (1000000UL / current_rate_hz)
+        : (1000000UL / ADXL345_DATA_RATE_HZ);
+    const uint32_t capture_start_us = micros();
+    uint64_t total_read_high_us = 0;
+    uint64_t total_wait_low_us = 0;
 
     for (uint32_t i = 0; i < MEMS_SAMPLE_COUNT; ++i) {
+        const uint32_t sample_start_us = micros();
+        if (g_debug_mode) {
+            digitalWrite(GPIO_DEBUG_SAMPLE_PULSE, HIGH);
+        }
+
         if (!readRegisters(REG_DATAX0, raw, sizeof(raw))) {
+            if (g_debug_mode) {
+                digitalWrite(GPIO_DEBUG_SAMPLE_PULSE, LOW);
+            }
             return false;
         }
 
@@ -210,11 +226,40 @@ bool MEMSSensor::readRawData(MEMSData& data) {
         data.accel_z[i] = (static_cast<float>(z) * scale_g_per_lsb) - offset_z;
 
         if (g_debug_mode && i < 3) {
-            DEBUG_PRINT("MEMS[%u] X=%.3f Y=%.3f Z=%.3f g", static_cast<unsigned>(i), data.accel_x[i], data.accel_y[i], data.accel_z[i]);
+            DEBUG_MEMS_PRINT("MEMS[%u] X=%.3f Y=%.3f Z=%.3f g", static_cast<unsigned>(i), data.accel_x[i], data.accel_y[i], data.accel_z[i]);
         }
 
-        uint32_t sample_period_us = (current_rate_hz > 0) ? (1000000UL / current_rate_hz) : 625UL;
-        delayMicroseconds(sample_period_us);
+        const uint32_t measured_read_time_us = micros() - sample_start_us;
+        total_read_high_us += measured_read_time_us;
+        if (g_debug_mode) {
+            digitalWrite(GPIO_DEBUG_SAMPLE_PULSE, LOW);
+        }
+
+        if (measured_read_time_us < target_period_us) {
+            const uint32_t wait_low_us = target_period_us - measured_read_time_us;
+            total_wait_low_us += wait_low_us;
+            delayMicroseconds(wait_low_us);
+        }
+    }
+
+    const uint32_t capture_elapsed_us = micros() - capture_start_us;
+    if (capture_elapsed_us > 0) {
+        const float effective_sample_rate_hz =
+            (static_cast<float>(MEMS_SAMPLE_COUNT) * 1000000.0f) /
+            static_cast<float>(capture_elapsed_us);
+        g_mems_timing_stats.effective_sample_rate_hz = effective_sample_rate_hz;
+        g_mems_timing_stats.target_period_us = target_period_us;
+        g_mems_timing_stats.capture_elapsed_us = capture_elapsed_us;
+        g_mems_timing_stats.avg_read_high_us = static_cast<uint32_t>(total_read_high_us / MEMS_SAMPLE_COUNT);
+        g_mems_timing_stats.avg_wait_low_us = static_cast<uint32_t>(total_wait_low_us / MEMS_SAMPLE_COUNT);
+
+        INFO_PRINT("MEMS capture timing: target=%u Hz period=%u us actual=%lu us effective=%.1f Hz avg_high=%lu us avg_low=%lu us",
+                   static_cast<unsigned>(current_rate_hz),
+                   static_cast<unsigned>(target_period_us),
+                   static_cast<unsigned long>(capture_elapsed_us),
+                   static_cast<double>(effective_sample_rate_hz),
+                   static_cast<unsigned long>(g_mems_timing_stats.avg_read_high_us),
+                   static_cast<unsigned long>(g_mems_timing_stats.avg_wait_low_us));
     }
 
     return true;
@@ -360,11 +405,11 @@ bool MEMSSensor::processVibrationData(const MEMSData& raw_data, VibrationAnalysi
     }
 
     if (g_debug_mode) {
-        DEBUG_PRINT("Vibration analysis: X(valid=%s freq=%.1fHz vel=%.3fmm/s disp=%.3fµm) Y(valid=%s freq=%.1fHz vel=%.3fmm/s disp=%.3fµm) Z(valid=%s freq=%.1fHz vel=%.3fmm/s disp=%.3fµm)",
+        DEBUG_MEMS_PRINT("Vibration analysis: X(valid=%s freq=%.1fHz vel=%.3fmm/s disp=%.3fµm) Y(valid=%s freq=%.1fHz vel=%.3fmm/s disp=%.3fµm) Z(valid=%s freq=%.1fHz vel=%.3fmm/s disp=%.3fµm)",
                    valid_x ? "YES" : "NO", analysis.vibration_freq_x, analysis.rms_velocity_x, analysis.displacement_x_um,
                    valid_y ? "YES" : "NO", analysis.vibration_freq_y, analysis.rms_velocity_y, analysis.displacement_y_um,
                    valid_z ? "YES" : "NO", analysis.vibration_freq_z, analysis.rms_velocity_z, analysis.displacement_z_um);
-        DEBUG_PRINT("Orientation: pitch=%.1f roll=%.1f yaw=%.1f", analysis.pitch, analysis.roll, analysis.yaw);
+        DEBUG_MEMS_PRINT("Orientation: pitch=%.1f roll=%.1f yaw=%.1f", analysis.pitch, analysis.roll, analysis.yaw);
     }
 
     return true;
@@ -383,7 +428,7 @@ bool MEMSSensor::setDataRate(uint16_t rate_hz) {
     }
 
     bool ok = writeRegister(REG_BW_RATE, rate_code);
-    DEBUG_PRINT("ADXL345 data rate set to %u Hz", current_rate_hz);
+    DEBUG_MEMS_PRINT("ADXL345 data rate set to %u Hz", current_rate_hz);
     return ok;
 }
 
@@ -453,7 +498,7 @@ bool MEMSSensor::setupInterrupt(uint8_t int_pin, bool activity) {
     }
 
     clearInterruptSource();
-    DEBUG_PRINT("ADXL345 activity interrupt enabled on %s, active LOW",
+    DEBUG_MEMS_PRINT("ADXL345 activity interrupt enabled on %s, active LOW",
                 (int_pin == GPIO_ADXL345_INT2) ? "INT2" : "INT1");
     return true;
 }
@@ -476,7 +521,7 @@ bool MEMSSensor::clearInterruptSource(uint8_t* source) {
         *source = int_source;
     }
 
-    DEBUG_PRINT("ADXL345 INT_SOURCE read/cleared: 0x%02X", int_source);
+    //DEBUG_MEMS_PRINT("ADXL345 INT_SOURCE read/cleared: 0x%02X", int_source);
     return true;
 }
 
@@ -578,7 +623,7 @@ void MEMSSensor::performFFT(const float* acceleration_data, uint32_t count, floa
     }
 
     if (g_debug_mode) {
-        DEBUG_PRINT("FFT: peak_freq=%.1fHz power=%.1fdB noise_floor=%.1fdB valid=%s",
+        DEBUG_MEMS_PRINT("FFT: peak_freq=%.1fHz power=%.1fdB noise_floor=%.1fdB valid=%s",
                    peak_frequency, power, g_system_config.vibration_noise_floor_db,
                    (peak_frequency > 0.0f) ? "YES" : "NO");
     }
@@ -678,8 +723,28 @@ bool BatterySensor::begin() {
 float BatterySensor::readVoltage() {
     uint16_t raw_value = analogRead(GPIO_BATTERY_ADC);
     float voltage = (raw_value / 4095.0f) * ADC_REFERENCE_VOLTAGE * VOLTAGE_DIVIDER_RATIO;
-    DEBUG_PRINT("Battery ADC: %u -> %.2f V", raw_value, voltage);
+    DEBUG_BATTERY_PRINT("Battery ADC: %u -> %.2f V", raw_value, voltage);
     return voltage;
+}
+
+float BatterySensor::readVoltageAverage(uint8_t samples, uint32_t delay_ms) {
+    if (samples == 0) {
+        samples = 1;
+    }
+
+    float total_voltage = 0.0f;
+    for (uint8_t i = 0; i < samples; ++i) {
+        total_voltage += readVoltage();
+        if (delay_ms > 0 && (i + 1U) < samples) {
+            delay(delay_ms);
+        }
+    }
+
+    const float average_voltage = total_voltage / static_cast<float>(samples);
+    DEBUG_BATTERY_PRINT("Battery averaged over %u samples -> %.2f V",
+                static_cast<unsigned>(samples),
+                average_voltage);
+    return average_voltage;
 }
 
 float BatterySensor::getBatteryPercentage() {

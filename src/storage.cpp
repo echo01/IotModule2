@@ -164,11 +164,13 @@ SystemConfig Storage::createDefaultConfig() {
     strlcpy(config.mqtt_topic_ack, "viot/config/ack", sizeof(config.mqtt_topic_ack));
     strlcpy(config.mqtt_topic_result, "viot/config/result", sizeof(config.mqtt_topic_result));
     config.mqtt_publish_interval_s = 60;
+    config.mqtt_publish_on_vibration_trigger = false;
+    config.mqtt_publish_vibration_threshold_mm_s = 5.0f;
     config.mqtt_use_tls = false;
     config.mqtt_aws_iot_enabled = false;
     
     // ADXL345 defaults
-    config.adxl345_rate_hz = 1600;
+    config.adxl345_rate_hz = 800;
     config.adxl345_range_g = 16;
     config.adxl345_offset_x = 0.0f;
     config.adxl345_offset_y = 0.0f;
@@ -188,6 +190,7 @@ SystemConfig Storage::createDefaultConfig() {
     config.sleep_enabled = true;
     config.sleep_interval_sec = DEEP_SLEEP_INTERVAL_SEC;
     config.log_enabled = true;
+    config.debug_log_mask = DEBUG_LOG_ALL;
     
     return config;
 }
@@ -218,6 +221,8 @@ void Storage::config_to_json(const SystemConfig& config, JsonDocument& doc) {
     doc["mqtt"]["topic_ack"] = config.mqtt_topic_ack;
     doc["mqtt"]["topic_result"] = config.mqtt_topic_result;
     doc["mqtt"]["publish_interval_sec"] = config.mqtt_publish_interval_s;
+    doc["mqtt"]["publish_on_vibration_trigger"] = config.mqtt_publish_on_vibration_trigger;
+    doc["mqtt"]["publish_vibration_threshold_mm_s"] = config.mqtt_publish_vibration_threshold_mm_s;
     doc["mqtt"]["use_tls"] = config.mqtt_use_tls;
     doc["mqtt"]["aws_iot_enabled"] = config.mqtt_aws_iot_enabled;
     
@@ -239,6 +244,7 @@ void Storage::config_to_json(const SystemConfig& config, JsonDocument& doc) {
     doc["power"]["sleep_enabled"] = config.sleep_enabled;
     doc["power"]["sleep_interval_sec"] = config.sleep_interval_sec;
     doc["power"]["log_enabled"] = config.log_enabled;
+    doc["power"]["debug_log_mask"] = config.debug_log_mask;
 }
 
 SystemConfig Storage::json_to_config(const JsonDocument& doc) {
@@ -307,10 +313,17 @@ SystemConfig Storage::json_to_config(const JsonDocument& doc) {
     }
 
     config.mqtt_publish_interval_s = doc["mqtt"]["publish_interval_sec"] | 60;
+    config.mqtt_publish_on_vibration_trigger = doc["mqtt"]["publish_on_vibration_trigger"] | false;
+    config.mqtt_publish_vibration_threshold_mm_s = doc["mqtt"]["publish_vibration_threshold_mm_s"] | 5.0f;
+    if (config.mqtt_publish_vibration_threshold_mm_s < 0.1f) {
+        config.mqtt_publish_vibration_threshold_mm_s = 0.1f;
+    } else if (config.mqtt_publish_vibration_threshold_mm_s > 1000.0f) {
+        config.mqtt_publish_vibration_threshold_mm_s = 1000.0f;
+    }
     config.mqtt_use_tls = doc["mqtt"]["use_tls"] | false;
     config.mqtt_aws_iot_enabled = doc["mqtt"]["aws_iot_enabled"] | false;
     
-    config.adxl345_rate_hz = doc["adxl345"]["rate_hz"] | 1600;
+    config.adxl345_rate_hz = doc["adxl345"]["rate_hz"] | 800;
     if (config.adxl345_rate_hz <= 400) {
         config.adxl345_rate_hz = 400;
     } else if (config.adxl345_rate_hz <= 800) {
@@ -335,6 +348,7 @@ SystemConfig Storage::json_to_config(const JsonDocument& doc) {
     config.sleep_enabled = doc["power"]["sleep_enabled"] | true;
     config.sleep_interval_sec = doc["power"]["sleep_interval_sec"] | DEEP_SLEEP_INTERVAL_SEC;
     config.log_enabled = doc["power"]["log_enabled"] | true;
+    config.debug_log_mask = doc["power"]["debug_log_mask"] | DEBUG_LOG_ALL;
     
     return config;
 }

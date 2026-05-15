@@ -10,11 +10,12 @@
 #define GPIO_BATTERY_ADC        34     // ADC for battery voltage (100k/100k divider)
 #define GPIO_ADXL345_INT1       25     // ADXL345 interrupt 1 (avoid boot-strap pins)
 #define GPIO_ADXL345_INT2       26     // ADXL345 interrupt 2
+#define GPIO_DEBUG_SAMPLE_PULSE 23     // Debug pulse output for oscilloscope timing checks
 
 /* ========== I2C CONFIGURATION ========== */
 #define I2C_SDA_PIN             21
 #define I2C_SCL_PIN             22
-#define I2C_FREQUENCY           400000  // 400 kHz
+#define I2C_FREQUENCY           400000  // 400 kHz (ADXL345 I2C max)
 #define ADXL345_I2C_ADDRESS     0x53   // ADXL345 default I2C address (ALT ADDRESS LOW)
 
 /* ========== SERIAL CONFIGURATION ========== */
@@ -23,12 +24,12 @@
 
 /* ========== TIMING & POWER ========== */
 #define DEEP_SLEEP_INTERVAL_SEC (60 * 60)  // 1 hour wake timer
-#define MEMS_SAMPLING_RATE      1600       // Hz
+#define MEMS_SAMPLING_RATE      800        // Hz
 #define MEMS_SAMPLE_COUNT       1024       // FFT-sized sampling window to keep MQTTS heap stable
 #define MEMS_STARTUP_DELAY_MS   2000       // Skip first 2 seconds
 
 /* ========== ADXL345 SETTINGS ========== */
-#define ADXL345_DATA_RATE_HZ    1600
+#define ADXL345_DATA_RATE_HZ    800
 #define ADXL345_RANGE_G         16
 #define ADXL345_OFFSET_X        0.0f
 #define ADXL345_OFFSET_Y        0.0f
@@ -51,6 +52,11 @@
 /* ========== WEB SERVER ========== */
 #define WEB_SERVER_PORT         80
 #define WEBSOCKET_BUFFER_SIZE   8192
+
+/* ========== DISCOVERY ========== */
+#define DISCOVERY_UDP_PORT      37020
+#define DISCOVERY_SERVICE_NAME  "iot-sensor"
+#define DISCOVERY_PROTOCOL_ID   "viot-discovery-v1"
 
 /* ========== FFT SETTINGS ========== */
 #define FFT_SIZE                1024      // FFT samples
@@ -107,6 +113,7 @@
 #define WIFI_CONNECT_MAX_RETRIES 5
 #define WIFI_CONNECT_TIMEOUT_MS  5000
 #define WIFI_RETRY_DELAY_MS      1000
+#define MQTT_CONNECT_MAX_RETRIES 5
 
 /* ========== QUEUE SIZES ========== */
 #define MEMS_DATA_QUEUE_SIZE    10

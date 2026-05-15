@@ -41,6 +41,7 @@
       <a href="/fft_chart.html">FFT Chart</a>
       <a href="/mqtt_setting.html">MQTT Config</a>
       <a href="/network_setting.html">Network Config</a>
+      <a href="/operate_config.html">Operate Config</a>
       <a href="/mems_setting.html">MEMS Config</a>
       <a href="/system_setting.html">System</a>
     </div>
@@ -65,6 +66,8 @@
       <div class="card"><div class="label">Yaw</div><div class="val" id="yaw">0 <span class="unit">°</span></div></div>
       <div class="card"><div class="label">Battery Voltage</div><div class="val" id="battery_v">0 <span class="unit">V</span></div></div>
       <div class="card"><div class="label">WiFi RSSI</div><div class="val" id="wifi_rssi">0 <span class="unit">dBm</span></div></div>
+      <div class="card"><div class="label">Effective Sample Rate</div><div class="val" id="sample_rate_eff">0 <span class="unit">Hz</span></div></div>
+      <div class="card"><div class="label">Sample Read / Wait</div><div class="val" id="sample_timing">0 / 0 <span class="unit">us</span></div></div>
     </div>
 
     <div class="card" style="margin-top:12px">
@@ -125,6 +128,8 @@
     updateOrientationCube(d.orientation?.pitch, d.orientation?.roll, d.orientation?.yaw);
     setText('battery_v', `${fmt(d.battery,2)} V`);
     setText('wifi_rssi', `${Number(d.rssi ?? -100)} dBm`);
+    setText('sample_rate_eff', `${fmt(d.mems_timing?.effective_sample_rate_hz,1)} Hz`);
+    setText('sample_timing', `${Number(d.mems_timing?.avg_read_high_us ?? 0)} / ${Number(d.mems_timing?.avg_wait_low_us ?? 0)} us`);
   }
 
   function updateOrientationCube(pitch, roll, yaw) {

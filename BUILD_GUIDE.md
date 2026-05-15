@@ -1,414 +1,382 @@
-# VIOT Build & Deployment Guide
+# VIOT Build Guide
 
-## Quick Start
+Build and deployment guide for the current firmware, with emphasis on producing a testable device for Mobile App development.
 
-### 1. Prerequisites
-- PlatformIO (https://platformio.org/)
-- Python 3.6+
-- ESP32 board connected via USB
+This guide reflects:
 
-### 2. Build
-```bash
-cd iotmodule2
-platformio run
-```
+- `platformio.ini`
+- `src/`
+- `data/www/`
 
-### 3. Upload
-```bash
-platformio run --target upload
-```
+## 1. Toolchain Summary
 
-### 4. Monitor
-```bash
-platformio device monitor --baud 115200
-```
+Current PlatformIO environment from `platformio.ini`:
 
-## Detailed Setup
+- environment: `esp32-s3-devkitc-1`
+- platform: `espressif32`
+- board: `esp32dev`
+- framework: Arduino
+- monitor speed: `115200`
+- upload speed: `460800`
+- filesystem: SPIFFS
+- partition table: `default.csv`
 
-### Windows Setup
+Library dependencies:
 
-#### Step 1: Install PlatformIO
+- `ArduinoJson`
+- `pubsubclient`
+- `ESP Async WebServer`
+- `AsyncTCP`
+- `arduinoFFT`
 
-**Option A: VS Code Extension (Recommended)**
-1. Install Visual Studio Code
-2. Open Extensions (Ctrl+Shift+X)
-3. Search for "PlatformIO IDE"
-4. Click Install
-5. Reload VS Code
+Important note:
 
-**Option B: Command Line**
+- The environment name says `esp32-s3-devkitc-1`, but the configured board is currently `esp32dev`.
+- Keep this mismatch in mind when validating real hardware assumptions.
+
+## 2. Prerequisites
+
+Install one of:
+
+### Option A: VS Code + PlatformIO
+
+1. Install Visual Studio Code.
+2. Install the `PlatformIO IDE` extension.
+3. Open this project folder in VS Code.
+
+### Option B: PlatformIO CLI
+
 ```bash
 pip install platformio
 pio --version
 ```
 
-#### Step 2: Prepare Project
-```bash
-git clone <repo> iotmodule2
-cd iotmodule2
-cd iotmodule2
-```
+## 3. Project Layout You Should Know
 
-#### Step 3: Build Project
+- `src/` firmware source
+- `include/` headers and runtime data structures
+- `data/www/` static web UI assets served from SPIFFS
+- `config.example.json` sample config shape
+- `platformio.ini` build settings
+
+## 4. First Build
+
+From the project root:
+
 ```bash
 pio run
 ```
 
-First build may take 3-5 minutes (compiling libraries)
+Expected outcome:
 
-#### Step 4: Upload to Board
+- firmware compiles successfully
+- `.pio/` build artifacts are created
+
+If the first build is slow, that is normal because PlatformIO will fetch dependencies and toolchains.
+
+## 5. Upload Firmware
+
+Auto-detect port:
+
 ```bash
-# Find COM port
-pio device list
-
-# Upload (auto-detects port)
 pio run --target upload
+```
 
-# Or specify port explicitly
+Specify port explicitly if needed:
+
+```bash
 pio run --target upload --upload-port COM3
 ```
 
-**Wait for "Upload successful" message**
+To list ports:
 
-#### Step 5: Monitor Serial
+```bash
+pio device list
+```
+
+## 6. Upload Web Assets To SPIFFS
+
+The HTTP UI depends on files in `data/www/`, so for a complete device bring-up you should also upload the filesystem image:
+
+```bash
+pio run --target uploadfs
+```
+
+This step matters for Mobile App testing because:
+
+- provisioning pages live in SPIFFS
+- browser/manual fallback tools live in SPIFFS
+- `GET /` and related pages depend on it
+
+## 7. Open Serial Monitor
+
 ```bash
 pio device monitor --baud 115200
 ```
 
-Press Ctrl+Shift+Q to quit monitor
+Useful boot logs to look for:
 
-### Linux/Mac Setup
+- SPIFFS mounted
+- ADXL345 initialized
+- WiFi handler initializing
+- MQTT handler initialized
+- Web server started
+- mDNS or UDP discovery ready
 
-Same commands, but use `/dev/ttyUSB0` or `/dev/cu.SLAB_USBtoUART` for port names.
+## 8. Typical Flash Sequence
+
+For a clean firmware + UI refresh:
 
 ```bash
-# Linux
-pio run --target upload --upload-port /dev/ttyUSB0
-pio device monitor --upload-port /dev/ttyUSB0 --baud 115200
-
-# Mac
-pio run --target upload --upload-port /dev/cu.SLAB_USBtoUART
-pio device monitor --upload-port /dev/cu.SLAB_USBtoUART --baud 115200
+pio run
+pio run --target upload
+pio run --target uploadfs
+pio device monitor --baud 115200
 ```
 
-## Configuration After Upload
+## 9. Runtime Modes To Validate
 
-### Initial Boot
+### Debug mode
 
-1. **Power on the ESP32**
-   - Status LED (GPIO32) should light up
-   - Check serial monitor for startup messages
+Condition:
 
-2. **First Boot Behavior**
-   - If `config.json` missing → uses default config
-   - AP mode enabled: Connect to `VIOT_XXYY` WiFi
-   - Password: `12345678`
+- `GPIO27 = HIGH`
 
-3. **Access Web Interface**
-   - Open browser: `http://192.168.4.1`
-   - Configure WiFi SSID/password
-   - Configure MQTT broker details
-   - Click Save
+Behavior:
 
-### Configure via Serial (Debug Mode)
+- deep sleep disabled
+- verbose logs available
+- AP fallback can stay available while STA is not connected
+- battery refresh runs periodically
 
-1. **Enable Debug Mode**
-   - Set GPIO27 to HIGH (connect to 3.3V or button)
-   - Reboot device
+Recommended for:
 
-2. **Watch Serial Monitor**
-   ```
-   [INFO] DEBUG MODE ENABLED (GPIO27 = HIGH)
-   [INFO] WiFi Handler initializing...
-   [INFO] MQTT Handler initialized...
-   [INFO] Setup Complete
-   ```
+- Mobile App development
+- API inspection
+- discovery tests
+- WiFi provisioning tests
 
-3. **Test Sensor**
-   ```
-   [DEBUG] MEMS samples: 10
-   [DEBUG] RMS Accel: X=0.015 Y=0.012 Z=1.001 G
-   ```
+### Normal mode
 
-### Manual Configuration (JSON)
+Condition:
 
-1. **Create config.json**
-   ```json
-   {
-     "wifi": {
-       "ssid": "MyNetwork",
-       "password": "MyPassword"
-     },
-     "mqtt": {
-       "broker": "mqtt.example.com",
-       "port": 1883
-     }
-   }
-   ```
+- `GPIO27 = LOW`
 
-2. **Upload to SPIFFS**
-   ```bash
-   # Create www directory
-   mkdir data
-   mkdir data/www
-   
-   # Place config.json in data/
-   # Upload with PlatformIO
-   pio run --target uploadfs
-   ```
+Behavior:
 
-## Building for Different Scenarios
+- deep sleep enabled
+- battery sampled once near startup for that wake cycle
+- device may connect, publish, and go back to sleep
 
-### Standard Build
+Recommended for:
+
+- power behavior validation
+- production-like MQTT publish flow
+
+## 10. Initial Bring-Up Checklist
+
+After upload, validate in this order:
+
+1. Serial boots cleanly without repeated crash/reset loop.
+2. Sensor init succeeds.
+3. SPIFFS mounts successfully.
+4. Device exposes either:
+   - STA connection, or
+   - AP fallback when allowed
+5. `GET /api/discover` responds.
+6. `GET /api/status` responds.
+7. `GET /api/config` responds.
+8. `GET /api/dashboard` eventually returns `has_data=true`.
+
+## 11. Provisioning Paths
+
+### Path A: Use device AP and web UI
+
+Use when:
+
+- device has no STA credentials
+- you want a quick manual setup before testing the Mobile App
+
+Typical AP defaults:
+
+- SSID: `VIOT_XXXX`
+- password: `12345678`
+- IP: `192.168.4.1`
+
+Then:
+
+1. connect phone/laptop to the device AP
+2. open `http://192.168.4.1`
+3. save WiFi and MQTT settings
+4. let the device reconnect
+
+### Path B: Provision with API
+
+Use:
+
+- `POST /api/network_config`
+- `POST /api/mqtt_config`
+- `POST /api/mems_config`
+- `POST /api/operate_config`
+
+Important:
+
+- current firmware expects form fields, not JSON body
+
+## 12. Quick API Smoke Test
+
+Once the device is reachable on IP `192.168.1.45`, these are good checks:
+
+```bash
+curl http://192.168.1.45/api/discover
+curl http://192.168.1.45/api/status
+curl http://192.168.1.45/api/config
+curl "http://192.168.1.45/api/fft_spectrum?axis=x"
+```
+
+Example config update using form encoding:
+
+```bash
+curl -X POST http://192.168.1.45/api/network_config ^
+  -H "Content-Type: application/x-www-form-urlencoded" ^
+  -d "ssid=OfficeWiFi&password=secret123&ap_enabled=1"
+```
+
+## 13. MQTT Validation
+
+If MQTT is configured, validate:
+
+1. broker connection succeeds
+2. telemetry appears on `topic_publish`
+3. command topic receives FFT requests
+4. ack topic returns status payloads
+5. result topic and axis topic receive FFT payloads
+
+Simple FFT request example:
+
+Topic:
+
+- `viot/config`
+
+Payload:
+
+```json
+{
+  "action": "fft_x",
+  "request_id": "mobile-test-001",
+  "step_hz": 10
+}
+```
+
+## 14. Common Development Commands
+
+Build:
+
 ```bash
 pio run
 ```
 
-### Debug Build (with extra logging)
-Edit `platformio.ini`:
-```ini
-build_flags =
-    -D CORE_DEBUG_LEVEL=5
-    -D LOG_LOCAL_LEVEL=5
-```
-Then: `pio run`
+Clean build:
 
-### Clean Build (clear previous artifacts)
 ```bash
 pio run --target clean
 pio run
 ```
 
-### Verbose Output
+Verbose build:
+
 ```bash
 pio run -v
+```
+
+Verbose upload:
+
+```bash
 pio run --target upload -v
 ```
 
-## Uploading Web Dashboard
+## 15. Common Issues
 
-The dashboard HTML is served inline, but for custom versions:
+### Build succeeds but web pages are missing
 
-1. **Place HTML in data/www/**
-   ```
-   data/
-   └── www/
-       └── index.html
-   ```
+Cause:
 
-2. **Upload filesystem**
-   ```bash
-   pio run --target uploadfs
-   ```
+- firmware uploaded, SPIFFS not uploaded
 
-3. **Access at device IP**
-   - `http://192.168.4.1` (AP mode)
-   - `http://<sta-ip>` (WiFi mode)
+Fix:
 
-## Firmware Update Process
-
-### OTA Update (Over-the-Air)
-
-Implement OTA endpoint:
-```cpp
-// In web_server.cpp
-server.on("/api/update", HTTP_POST, [](AsyncWebServerRequest* request) {
-    int errorCode = Update.hasError() ? 1 : 0;
-    request->send(200, "text/plain", errorCode ? "FAIL" : "OK");
-});
-```
-
-Then upload new firmware via Web API.
-
-### Manual Update
-
-1. Connect board via USB
-2. Run: `platformio run --target upload`
-3. Reboot when complete
-
-## Troubleshooting Build Issues
-
-### "Board not found" Error
 ```bash
-# List available boards
-pio boards esp32
-
-# Check board definition
-pio boards esp32doit-devkit-v1
-
-# Update ESP32 platform
-pio platform update espressif32
+pio run --target uploadfs
 ```
 
-### Library Compilation Errors
-```bash
-# Clear library cache
-pio lib update
-pio lib uninstall ArduinoJson
-pio lib install ArduinoJson@^7.0.0
+### Device is online but Mobile App cannot find it by mDNS
 
-# Full clean
-pio run --target clean
-pio platform update
-```
+Cause:
 
-### USB Connection Issues
+- mDNS works only when STA is connected
 
-**Windows:**
-- Install CH340 driver: https://sparkfun.com/ch340-driverhttps://github.com/MarlinFirmware/Marlin/wiki/Installing-Marlin
-- Find COM port: Device Manager → COM & LPT Ports
-- Try different USB port
+Fix:
 
-**Linux:**
-```bash
-# Check device
-ls -la /dev/ttyUSB*
+- try UDP discovery
+- or connect directly to known IP
 
-# Add user to group
-sudo usermod -a -G dialout $USER
-sudo reboot
-```
+### Mobile App posts JSON and nothing changes
 
-**Mac:**
-```bash
-# Install CP210x drivers
-# https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers
+Cause:
 
-ls /dev/cu.*
-```
+- current endpoints parse form fields, not JSON body
 
-### Baud Rate Issues
-```bash
-# Verify in serial monitor
-platformio device monitor --baud 115200 --filter esp32_exception_decoder
-```
+Fix:
 
-If garbage output:
-- Check board voltage (should be 3.3V stable)
-- Try lower baud: 9600 or 74880
-- Verify USB cable (data not charge-only)
+- switch to `application/x-www-form-urlencoded` or `multipart/form-data`
 
-## Partition & Memory Management
+### `503 {"error":"low memory"}`
 
-### Check Flash
-```bash
-pio run --target size
-```
+Cause:
 
-Output shows:
-```
-RAM:   [===       ] 35.1% (used 114961 bytes from 327680 bytes)
-Flash: [====      ] 39.2% (used 512816 bytes from 1310720 bytes)
-```
+- heap protection in API handlers
 
-If flash usage >80%:
-- Reduce log verbosity
-- Disable unused features
-- Use LittleFS instead of SPIFFS
+Fix:
 
-### Custom Partition
+- retry after a short delay
+- reduce simultaneous polling
+- avoid opening many heavy pages while MQTT/TLS work is active
 
-Edit `platformio.ini`:
-```ini
-board_build.partitions = custom_partitions.csv
-```
+### MQTT disconnects during web/API access
 
-Create `custom_partitions.csv`:
-```
-# Name,   Type, SubType, Offset,  Size, Flags
-nvs,      data, nvs,     0x9000,  0x6000,
-otadata,  data, ota,     0xf000,  0x2000,
-app0,     app,  ota_0,   0x10000, 0x140000,
-app1,     app,  ota_1,   0x150000,0x140000,
-spiffs,   data, spiffs,  0x290000,0x170000,
-```
+Cause:
 
-## Performance Optimization
+- firmware intentionally pauses MQTT during some STA-served web requests to protect heap
 
-### Reduce Build Time
-```bash
-# Disable optimization (faster build, slower runtime)
-build_flags = -Os
+Fix:
 
-# Fast async I/O
--D CONFIG_ASYNC_TCP_RUNNING_CORE=1
-```
+- treat it as temporary
+- avoid interpreting it as a fatal network error immediately
 
-### Reduce Firmware Size
-```bash
-# Strip symbols
-build_flags = -s
+## 16. Recommended Setup For Mobile App Development
 
-# Compiler optimization
-build_flags = -Os -flto
-```
+Use this setup when the goal is fast iteration:
 
-## CI/CD Integration
+1. Run the device in debug mode with `GPIO27 = HIGH`.
+2. Upload both firmware and SPIFFS.
+3. Join the same LAN as the phone/emulator/dev machine.
+4. Validate `GET /api/discover`, `GET /api/status`, and `GET /api/dashboard`.
+5. Keep a serial monitor open while testing discovery and config flows.
+6. Use the web UI only as a fallback reference, not as the primary test path.
 
-### GitHub Actions Example
-```yaml
-name: Build
-on: [push, pull_request]
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-python@v2
-      - run: pip install platformio
-      - run: pio run
-```
+## 17. Release Checklist For A Test Device
 
-### GitLab CI Example
-```yaml
-build:firmware:
-  image: python:3.9
-  script:
-    - pip install platformio
-    - pio run
-  artifacts:
-    paths:
-      - .pio/build/esp32doit-devkit-v1/
-```
+Before handing the device to the Mobile team:
 
-## Production Deployment
-
-### Pre-Release Checklist
-- [ ] Compile with optimizations: `-Os -flto`
-- [ ] Disable debug logging in config.h
-- [ ] Test deep sleep functionality
-- [ ] Verify MQTT reconnection logic
-- [ ] Test WiFi fallback to AP mode
-- [ ] Validate battery voltage reading
-- [ ] Check SPIFFS filesystem integrity
-
-### Release Build
-```bash
-# Set version
-export VERSION=1.0.0
-
-# Build optimized
-platformio run -e esp32doit-devkit-v1
-
-# Create release archive
-.pio/build/esp32doit-devkit-v1/firmware.bin → viot_v1.0.0.bin
-```
-
-### Deployment Steps
-1. Backup current firmware
-2. Upload new firmware to single test device
-3. Verify all features work
-4. Batch deploy if successful
-5. Monitor for errors in production
-
-## Support & Resources
-
-- **PlatformIO Docs**: https://docs.platformio.org/
-- **ESP32 Arduino**: https://github.com/espressif/arduino-esp32
-- **ESP-IDF**: https://docs.espressif.com/projects/esp-idf/
-- **Community**: https://community.platformio.org/
-
----
-
-**Last Updated**: March 2024
-**PlatformIO Version**: Latest API
+1. Confirm build and upload succeed.
+2. Confirm `uploadfs` completed.
+3. Confirm sensor initializes.
+4. Confirm discovery works by at least one method.
+5. Confirm `GET /api/config` returns expected defaults or test config.
+6. Confirm at least one config `POST` endpoint applies changes successfully.
+7. Confirm MQTT works if the app depends on it.
+8. Record:
+   - firmware build date/time from `GET /api/discover`
+   - device hostname
+   - current STA IP or AP IP
+   - configured MQTT topics

@@ -27,6 +27,7 @@
       <a href="/fft_chart.html">FFT Chart</a>
       <a href="/mqtt_setting.html">MQTT Config</a>
       <a href="/network_setting.html">Network Config</a>
+      <a href="/operate_config.html">Operate Config</a>
       <a href="/mems_setting.html">MEMS Config</a>
       <a href="/system_setting.html">System</a>
     </div>
@@ -55,7 +56,6 @@
       <label>Topic Command</label><input name="topic_subscribe" placeholder="viot/config">
       <label>Topic ACK</label><input name="topic_ack" placeholder="viot/config/ack">
       <label>Topic Result</label><input name="topic_result" placeholder="viot/config/result">
-      <label>Publish Interval (sec)</label><input name="publish_interval_s" type="number" min="1" max="3600">
       <button type="submit">Save MQTT Config</button>
     </form>
     <div class="msg" id="msg"></div>
@@ -68,7 +68,7 @@ function setv(name,v){const e=f.querySelector(`[name="${name}"]`); if(e) e.value
 
 function renderSummary(c){
   const protocol = c.mqtt?.use_tls ? 'MQTTS' : 'MQTT';
-  summary.textContent = `Current ${protocol} Broker: ${c.mqtt?.broker || '-'}:${c.mqtt?.port || '-'} | Main: ${c.mqtt?.topic_publish || 'viot/vibration'} | FFT X/Y/Z: ${c.mqtt?.topic_fft_x || 'viot/vibration/fft/x'} | ${c.mqtt?.topic_fft_y || 'viot/vibration/fft/y'} | ${c.mqtt?.topic_fft_z || 'viot/vibration/fft/z'} | CMD: ${c.mqtt?.topic_subscribe || 'viot/config'} | ACK: ${c.mqtt?.topic_ack || 'viot/config/ack'} | RESULT: ${c.mqtt?.topic_result || 'viot/config/result'} | Interval: ${c.mqtt?.publish_interval_s || 60}s | Status: ${c.mqtt?.status || '-'}`;
+  summary.textContent = `Current ${protocol} Broker: ${c.mqtt?.broker || '-'}:${c.mqtt?.port || '-'} | Main: ${c.mqtt?.topic_publish || 'viot/vibration'} | FFT X/Y/Z: ${c.mqtt?.topic_fft_x || 'viot/vibration/fft/x'} | ${c.mqtt?.topic_fft_y || 'viot/vibration/fft/y'} | ${c.mqtt?.topic_fft_z || 'viot/vibration/fft/z'} | CMD: ${c.mqtt?.topic_subscribe || 'viot/config'} | ACK: ${c.mqtt?.topic_ack || 'viot/config/ack'} | RESULT: ${c.mqtt?.topic_result || 'viot/config/result'} | Status: ${c.mqtt?.status || '-'}`;
 }
 
 function syncPortForProtocol(force=false){
@@ -93,7 +93,6 @@ fetch('/api/config').then(r=>r.json()).then(c=>{
   setv('topic_subscribe', c.mqtt?.topic_subscribe);
   setv('topic_ack', c.mqtt?.topic_ack || 'viot/config/ack');
   setv('topic_result', c.mqtt?.topic_result || 'viot/config/result');
-  setv('publish_interval_s', c.mqtt?.publish_interval_s || 60);
   syncPortForProtocol(false);
   renderSummary(c);
 }).catch(()=>{ summary.textContent='Current: unavailable'; });

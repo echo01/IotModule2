@@ -9,10 +9,27 @@
 /* ========== GLOBAL DEBUG FLAG ========== */
 extern bool g_debug_mode;
 extern bool g_log_enabled;
+extern uint32_t g_debug_log_mask;
+
+#define DEBUG_LOG_WIFI      (1UL << 0)
+#define DEBUG_LOG_MQTT      (1UL << 1)
+#define DEBUG_LOG_MEMS      (1UL << 2)
+#define DEBUG_LOG_POWER     (1UL << 3)
+#define DEBUG_LOG_WEB       (1UL << 4)
+#define DEBUG_LOG_BATTERY   (1UL << 5)
+#define DEBUG_LOG_OPERATE   (1UL << 6)
+#define DEBUG_LOG_SYSTEM    (1UL << 7)
+#define DEBUG_LOG_ALL       (DEBUG_LOG_WIFI | DEBUG_LOG_MQTT | DEBUG_LOG_MEMS | DEBUG_LOG_POWER | DEBUG_LOG_WEB | DEBUG_LOG_BATTERY | DEBUG_LOG_OPERATE | DEBUG_LOG_SYSTEM)
+
+#define DEBUG_CAT_PRINT(mask, fmt, ...) do { \
+    if (g_log_enabled && g_debug_mode && ((g_debug_log_mask & (mask)) != 0)) { \
+        Serial.printf("[DEBUG] " fmt "\n", ##__VA_ARGS__); \
+    } \
+} while(0)
 
 /* ========== DEBUG MACROS ========== */
 #define DEBUG_PRINT(fmt, ...) do { \
-    if (g_log_enabled && g_debug_mode) { \
+    if (g_log_enabled && g_debug_mode && g_debug_log_mask != 0) { \
         Serial.printf("[DEBUG] " fmt "\n", ##__VA_ARGS__); \
     } \
 } while(0)
@@ -32,6 +49,15 @@ extern bool g_log_enabled;
 #define ALWAYS_INFO_PRINT(fmt, ...) do { \
     Serial.printf("[INFO] " fmt "\n", ##__VA_ARGS__); \
 } while(0)
+
+#define DEBUG_WIFI_PRINT(fmt, ...) DEBUG_CAT_PRINT(DEBUG_LOG_WIFI, fmt, ##__VA_ARGS__)
+#define DEBUG_MQTT_PRINT(fmt, ...) DEBUG_CAT_PRINT(DEBUG_LOG_MQTT, fmt, ##__VA_ARGS__)
+#define DEBUG_MEMS_PRINT(fmt, ...) DEBUG_CAT_PRINT(DEBUG_LOG_MEMS, fmt, ##__VA_ARGS__)
+#define DEBUG_POWER_PRINT(fmt, ...) DEBUG_CAT_PRINT(DEBUG_LOG_POWER, fmt, ##__VA_ARGS__)
+#define DEBUG_WEB_PRINT(fmt, ...) DEBUG_CAT_PRINT(DEBUG_LOG_WEB, fmt, ##__VA_ARGS__)
+#define DEBUG_BATTERY_PRINT(fmt, ...) DEBUG_CAT_PRINT(DEBUG_LOG_BATTERY, fmt, ##__VA_ARGS__)
+#define DEBUG_OPERATE_PRINT(fmt, ...) DEBUG_CAT_PRINT(DEBUG_LOG_OPERATE, fmt, ##__VA_ARGS__)
+#define DEBUG_SYSTEM_PRINT(fmt, ...) DEBUG_CAT_PRINT(DEBUG_LOG_SYSTEM, fmt, ##__VA_ARGS__)
 
 /* ========== DATA STRUCTURES ========== */
 
@@ -125,6 +151,14 @@ struct SystemStatus {
     uint32_t data_sent_count;
 };
 
+struct MEMSTimingStats {
+    float effective_sample_rate_hz;
+    uint32_t target_period_us;
+    uint32_t capture_elapsed_us;
+    uint32_t avg_read_high_us;
+    uint32_t avg_wait_low_us;
+};
+
 /* Configuration (stored in JSON) */
 struct SystemConfig {
     // WiFi
@@ -154,6 +188,8 @@ struct SystemConfig {
     char mqtt_topic_ack[256];
     char mqtt_topic_result[256];
     uint16_t mqtt_publish_interval_s;
+    bool mqtt_publish_on_vibration_trigger;
+    float mqtt_publish_vibration_threshold_mm_s;
     
     bool mqtt_use_tls;
     bool mqtt_aws_iot_enabled;
@@ -179,10 +215,12 @@ struct SystemConfig {
     bool sleep_enabled;
     uint32_t sleep_interval_sec;
     bool log_enabled;
+    uint32_t debug_log_mask;
 };
 
 /* ========== GLOBAL SYSTEM CONFIG ========== */
 extern SystemConfig g_system_config;
+extern MEMSTimingStats g_mems_timing_stats;
 
 /* MQTT Payload */
 struct MQTTPayload {

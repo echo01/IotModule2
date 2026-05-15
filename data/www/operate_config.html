@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Operate Config</title>
+  <style>
+    body{font-family:Raleway,Segoe UI,sans-serif;background:#eef2f7;margin:0}
+    .top{background:#111827;color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center}
+    .nav a{color:#c7d2fe;text-decoration:none;margin-right:12px;font-weight:600}
+    .wrap{max-width:820px;margin:16px auto;padding:0 12px}
+    .card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 8px 18px rgba(0,0,0,.08)}
+    label{display:block;font-weight:600;margin:10px 0 6px}
+    input,select{width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px}
+    .check{display:flex;align-items:center;gap:10px;margin-top:12px}
+    .check input{width:auto}
+    .hint{margin-top:6px;font-size:12px;color:#64748b}
+    button{margin-top:14px;padding:10px 14px;border:0;border-radius:8px;background:#0f766e;color:#fff;font-weight:700;cursor:pointer}
+    .msg{margin-top:10px;color:#0f172a}
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div><strong>Operate Config</strong></div>
+    <div class="nav">
+      <a href="/index.html">Dashboard</a>
+      <a href="/fft_chart.html">FFT Chart</a>
+      <a href="/mqtt_setting.html">MQTT Config</a>
+      <a href="/network_setting.html">Network Config</a>
+      <a href="/operate_config.html">Operate Config</a>
+      <a href="/mems_setting.html">MEMS Config</a>
+      <a href="/system_setting.html">System</a>
+    </div>
+  </div>
+
+  <div class="wrap"><div class="card">
+    <form id="f">
+      <label>Publish MQTT Interval (sec)</label>
+      <input type="number" name="publish_interval_s" min="1" max="3600">
+
+      <label>MEMS Interrupt Threshold (mg)</label>
+      <input type="number" name="int_threshold_mg" min="1" max="16000">
+
+      <label class="check"><input type="checkbox" id="int_enabled"> Enable wakeup INT</label>
+
+      <label>Wakeup Timer (seconds)</label>
+      <input type="number" name="sleep_interval_sec" min="60" max="86400">
+
+      <label class="check"><input type="checkbox" id="publish_on_vibration_trigger"> Start WiFi/MQTT only when vibration velocity exceeds threshold</label>
+      <div class="hint">When enabled in normal mode, the node reads MEMS first after wake. If any axis X/Y/Z exceeds the configured velocity threshold, WiFi and MQTT will start and continue the normal publish flow. Otherwise the node returns to deep sleep without starting WiFi.</div>
+
+      <label>Velocity Trigger Threshold (mm/s)</label>
+      <input type="number" name="publish_vibration_threshold_mm_s" min="0.1" max="1000" step="0.1">
+
+      <label class="check"><input type="checkbox" id="log_enabled"> Print Log</label>
+      <div class="hint">Master switch for Serial logs. Turn off to reduce UART and CPU activity.</div>
+
+      <label>Debug Log Categories</label>
+      <label class="check"><input type="checkbox" id="debug_log_wifi"> WiFi</label>
+      <label class="check"><input type="checkbox" id="debug_log_mqtt"> MQTT</label>
+      <label class="check"><input type="checkbox" id="debug_log_mems"> MEMS</label>
+      <label class="check"><input type="checkbox" id="debug_log_power"> Power / Wake</label>
+      <label class="check"><input type="checkbox" id="debug_log_web"> Web</label>
+      <label class="check"><input type="checkbox" id="debug_log_battery"> Battery</label>
+      <label class="check"><input type="checkbox" id="debug_log_operate"> Operate Trigger</label>
+      <label class="check"><input type="checkbox" id="debug_log_system"> System</label>
+
+      <button type="submit">Save Operate Config</button>
+    </form>
+    <div class="msg" id="msg"></div>
+  </div></div>
+
+<script>
+const f=document.getElementById('f'); const msg=document.getElementById('msg');
+function setv(name,v){const e=f.querySelector(`[name="${name}"]`); if(e) e.value=v??'';}
+function syncTriggerUi(){
+  const enabled = document.getElementById('publish_on_vibration_trigger').checked;
+  const threshold = f.querySelector('[name="publish_vibration_threshold_mm_s"]');
+  threshold.disabled = !enabled;
+  threshold.style.opacity = enabled ? '1' : '0.6';
+}
+fetch('/api/config').then(r=>r.json()).then(c=>{
+  setv('publish_interval_s', c.operate?.publish_interval_s || c.mqtt?.publish_interval_s || 60);
+  setv('int_threshold_mg', c.operate?.wakeup_int_threshold_mg || c.adxl345?.int_threshold_mg || 250);
+  setv('sleep_interval_sec', c.operate?.wakeup_timer_sec || c.power?.sleep_interval_sec || 3600);
+  setv('publish_vibration_threshold_mm_s', c.operate?.publish_vibration_threshold_mm_s || c.mqtt?.publish_vibration_threshold_mm_s || 5.0);
+  document.getElementById('int_enabled').checked = c.operate?.wakeup_int_enabled !== false;
+  document.getElementById('publish_on_vibration_trigger').checked = c.operate?.publish_on_vibration_trigger === true || c.mqtt?.publish_on_vibration_trigger === true;
+  document.getElementById('log_enabled').checked = c.operate?.log_enabled !== false && c.power?.log_enabled !== false;
+  document.getElementById('debug_log_wifi').checked = c.power?.debug_logs?.wifi !== false;
+  document.getElementById('debug_log_mqtt').checked = c.power?.debug_logs?.mqtt !== false;
+  document.getElementById('debug_log_mems').checked = c.power?.debug_logs?.mems !== false;
+  document.getElementById('debug_log_power').checked = c.power?.debug_logs?.power !== false;
+  document.getElementById('debug_log_web').checked = c.power?.debug_logs?.web !== false;
+  document.getElementById('debug_log_battery').checked = c.power?.debug_logs?.battery !== false;
+  document.getElementById('debug_log_operate').checked = c.power?.debug_logs?.operate !== false;
+  document.getElementById('debug_log_system').checked = c.power?.debug_logs?.system !== false;
+  syncTriggerUi();
+}).catch(()=>syncTriggerUi());
+
+document.getElementById('publish_on_vibration_trigger').addEventListener('change', syncTriggerUi);
+
+f.onsubmit=async (e)=>{
+  e.preventDefault();
+  const fd=new FormData();
+  fd.append('publish_interval_s', f.publish_interval_s.value);
+  fd.append('int_threshold_mg', f.int_threshold_mg.value);
+  fd.append('sleep_interval_sec', f.sleep_interval_sec.value);
+  fd.append('int_enabled', document.getElementById('int_enabled').checked ? '1' : '0');
+  fd.append('publish_on_vibration_trigger', document.getElementById('publish_on_vibration_trigger').checked ? '1' : '0');
+  fd.append('publish_vibration_threshold_mm_s', f.publish_vibration_threshold_mm_s.value);
+  fd.append('log_enabled', document.getElementById('log_enabled').checked ? '1' : '0');
+  fd.append('debug_log_wifi', document.getElementById('debug_log_wifi').checked ? '1' : '0');
+  fd.append('debug_log_mqtt', document.getElementById('debug_log_mqtt').checked ? '1' : '0');
+  fd.append('debug_log_mems', document.getElementById('debug_log_mems').checked ? '1' : '0');
+  fd.append('debug_log_power', document.getElementById('debug_log_power').checked ? '1' : '0');
+  fd.append('debug_log_web', document.getElementById('debug_log_web').checked ? '1' : '0');
+  fd.append('debug_log_battery', document.getElementById('debug_log_battery').checked ? '1' : '0');
+  fd.append('debug_log_operate', document.getElementById('debug_log_operate').checked ? '1' : '0');
+  fd.append('debug_log_system', document.getElementById('debug_log_system').checked ? '1' : '0');
+  const res=await fetch('/api/operate_config',{method:'POST',body:fd});
+  const t=await res.text();
+  msg.textContent = res.ok ? 'Operate config saved and applied.' : `Save failed: ${t}`;
+};
+</script>
+</body>
+</html>

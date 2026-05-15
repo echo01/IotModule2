@@ -54,7 +54,7 @@ bool PowerManager::begin(WakeupReason last_wakeup_reason,
 
 void PowerManager::enterDeepSleep(uint32_t sleep_sec) {
     if (!sleep_enabled) {
-        DEBUG_PRINT("Sleep disabled (debug mode)");
+        DEBUG_POWER_PRINT("Sleep disabled (debug mode)");
         return;
     }
     
@@ -79,7 +79,7 @@ void PowerManager::enterDeepSleep(uint32_t sleep_sec) {
 
 void PowerManager::configureTimerWakeup(uint32_t seconds) {
     esp_sleep_enable_timer_wakeup(seconds * 1000000ULL);
-    DEBUG_PRINT("Timer wakeup configured for %u seconds", seconds);
+    DEBUG_POWER_PRINT("Timer wakeup configured for %u seconds", seconds);
 }
 
 void PowerManager::configureMotionWakeup(bool enabled) {
@@ -98,7 +98,7 @@ void PowerManager::configureMotionWakeup(bool enabled) {
 void PowerManager::configureExtIntWakeup(uint8_t pin, bool active_high) {
     int level = active_high ? 1 : 0;
     esp_sleep_enable_ext0_wakeup((gpio_num_t)pin, level);
-    DEBUG_PRINT("External interrupt wakeup configured on GPIO %u (active %s)", 
+    DEBUG_POWER_PRINT("External interrupt wakeup configured on GPIO %u (active %s)", 
                pin, active_high ? "HIGH" : "LOW");
 }
 
@@ -111,7 +111,7 @@ void PowerManager::configureModeSwitchWakeup() {
     rtc_gpio_pulldown_dis(mode_pin);
     esp_sleep_enable_ext0_wakeup(mode_pin, 1);
 
-    DEBUG_PRINT("Mode switch wakeup configured on GPIO %u (active HIGH)", GPIO_MODE_SWITCH);
+    DEBUG_POWER_PRINT("Mode switch wakeup configured on GPIO %u (active HIGH)", GPIO_MODE_SWITCH);
 }
 
 WakeupReason PowerManager::getWakeupReason() {
@@ -129,12 +129,12 @@ bool PowerManager::isSleepEnabled() const {
 
 void PowerManager::disableSleep() {
     sleep_enabled = false;
-    DEBUG_PRINT("Sleep disabled");
+    DEBUG_POWER_PRINT("Sleep disabled");
 }
 
 void PowerManager::enableSleep() {
     sleep_enabled = true;
-    DEBUG_PRINT("Sleep enabled");
+    DEBUG_POWER_PRINT("Sleep enabled");
 }
 
 bool PowerManager::isMotionWakeupSuppressed() const {

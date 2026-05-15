@@ -48,8 +48,10 @@ private:
     void handleSetNetworkConfig(AsyncWebServerRequest* request);
     void handleScanSSID(AsyncWebServerRequest* request);
     void handleSetMEMSConfig(AsyncWebServerRequest* request);
+    void handleSetOperateConfig(AsyncWebServerRequest* request);
     void handleSetSystemConfig(AsyncWebServerRequest* request);
     void handleGetStatus(AsyncWebServerRequest* request);
+    void handleGetDiscoverInfo(AsyncWebServerRequest* request);
     void handleGetDashboard(AsyncWebServerRequest* request);
     void handleGetFFTSpectrum(AsyncWebServerRequest* request);
     void handleGetFFTSpectrumCSV(AsyncWebServerRequest* request);
