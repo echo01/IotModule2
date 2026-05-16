@@ -13,7 +13,7 @@ MQTTHandler* g_active_mqtt_handler = nullptr;
 constexpr uint8_t kDefaultFFTStepHz = 10;
 constexpr uint8_t kAllowedFFTStepsHz[] = {10, 15, 20, 25, 30, 35, 40, 45, 50};
 constexpr float kCommandFFTStartHz = 10.0f;
-constexpr float kCommandFFTMaxHz = 1200.0f;
+constexpr float kCommandFFTMaxHz = 800.0f;
 
 bool isAllowedFFTStepHz(uint8_t value) {
     for (uint8_t allowed : kAllowedFFTStepsHz) {
@@ -879,10 +879,13 @@ bool MQTTHandler::capturePendingFFTSnapshot() {
 
     for (uint16_t i = 0; i < MQTT_FFT_POINTS; ++i) {
         const float target_hz = kCommandFFTStartHz + (static_cast<float>(i) * pending_fft_step_hz);
+        if (target_hz > kCommandFFTMaxHz) {
+            break;
+        }
         pending_fft_freq_hz[i] = target_hz;
         pending_fft_amp_mm_s[i] = 0.0f;
 
-        if (source_points == 0 || target_hz > kCommandFFTMaxHz || target_hz > source_max_hz) {
+        if (source_points == 0 || target_hz > source_max_hz) {
             pending_fft_points++;
             continue;
         }

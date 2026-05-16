@@ -7,7 +7,7 @@
 
 class MEMSSensor {
 public:
-    static constexpr uint16_t FFT_DISPLAY_POINTS = 120;
+    static constexpr uint16_t FFT_DISPLAY_POINTS = 80;
 
     MEMSSensor();
     ~MEMSSensor();

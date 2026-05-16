@@ -36,7 +36,7 @@
   <div class="wrap">
     <div class="card">
       <div class="row" style="margin-bottom:10px">
-        <strong>FFT Spectrum 10 - 1200 Hz (Amplitude mm/s)</strong>
+        <strong>FFT Spectrum 10 - 800 Hz (Amplitude mm/s)</strong>
         <label for="axisSelect">Axis:</label>
         <select id="axisSelect"><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select>
         <label for="scaleMode">Scale:</label>
@@ -75,7 +75,7 @@
     ctx.lineTo(x0+plotW,y0);
     ctx.stroke();
 
-    const minF=10,maxF=1200,minA=0;
+    const minF=10,maxF=800,minA=0;
     const scaleMode = document.getElementById('scaleMode').value;
     let maxA = 30;
     if (scaleMode === 'auto' && amp && amp.length > 0) {
@@ -95,7 +95,7 @@
     const sx=f=>x0+((f-minF)/(maxF-minF))*plotW;
     const sy=a=>y0-((a-minA)/(maxA-minA))*plotH;
 
-    [10,100,300,600,900,1200].forEach(f=>{
+    [10,100,200,400,600,800].forEach(f=>{
       const x=sx(f);
       ctx.strokeStyle='#e2e8f0';
       ctx.beginPath();

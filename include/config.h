@@ -75,6 +75,7 @@
 #define ADC_RESOLUTION          12        // bits (0-4095)
 #define ADC_REFERENCE_VOLTAGE   3.3f      // V
 #define VOLTAGE_DIVIDER_RATIO   2.0f      // 100k/100k
+#define BATTERY_ADC_CALIBRATION_FACTOR 1.0732f // Empirical trim: 3.81V meter / 3.55V ADC
 #define BATTERY_LOW_THRESHOLD_V 3.0f      // Low battery warning
 
 /* ========== ACCELERATION TO VELOCITY CONVERSION ========== */

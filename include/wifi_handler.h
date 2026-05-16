@@ -77,6 +77,7 @@ private:
     void ensureAPRunning();
     void stopAPMode();
     bool shouldRunAPMode() const;
+    bool shouldRunAPModeForStatus(WiFiStatus status) const;
     void applySTAIPConfig();
     String buildDefaultAPSSID() const;
     const char* reasonToString(wl_status_t status) const;

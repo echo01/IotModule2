@@ -156,7 +156,7 @@ MEMSSensor::MEMSSensor()
       offset_z(ADXL345_OFFSET_Z),
       spectrum_points(FFT_DISPLAY_POINTS) {
     for (uint16_t i = 0; i < FFT_DISPLAY_POINTS; ++i) {
-        spectrum_freq[i] = 10.0f + ((1190.0f * i) / (FFT_DISPLAY_POINTS - 1));
+        spectrum_freq[i] = 10.0f + (10.0f * i);
         spectrum_x[i] = 0.0f;
         spectrum_y[i] = 0.0f;
         spectrum_z[i] = 0.0f;
@@ -717,13 +717,22 @@ BatterySensor::BatterySensor() {
 
 bool BatterySensor::begin() {
     analogSetAttenuation(ADC_11db);
+    analogSetPinAttenuation(GPIO_BATTERY_ADC, ADC_11db);
+    analogReadResolution(ADC_RESOLUTION);
     return true;
 }
 
 float BatterySensor::readVoltage() {
-    uint16_t raw_value = analogRead(GPIO_BATTERY_ADC);
-    float voltage = (raw_value / 4095.0f) * ADC_REFERENCE_VOLTAGE * VOLTAGE_DIVIDER_RATIO;
-    DEBUG_BATTERY_PRINT("Battery ADC: %u -> %.2f V", raw_value, voltage);
+    const uint16_t raw_value = analogRead(GPIO_BATTERY_ADC);
+    const uint32_t pin_voltage_mv = analogReadMilliVolts(GPIO_BATTERY_ADC);
+    const float voltage =
+        (static_cast<float>(pin_voltage_mv) / 1000.0f) *
+        VOLTAGE_DIVIDER_RATIO *
+        BATTERY_ADC_CALIBRATION_FACTOR;
+    DEBUG_BATTERY_PRINT("Battery ADC: raw=%u pin=%lumV -> %.3f V",
+                        static_cast<unsigned>(raw_value),
+                        static_cast<unsigned long>(pin_voltage_mv),
+                        static_cast<double>(voltage));
     return voltage;
 }
 

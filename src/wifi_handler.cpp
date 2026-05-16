@@ -38,7 +38,7 @@ bool WiFiHandler::begin(const SystemConfig& cfg) {
     if (shouldAttemptSTA()) {
         requestReconnect();
     } else {
-        setStatus(shouldRunAPMode() ? AP_ONLY : WIFI_INIT);
+        setStatus(shouldRunAPModeForStatus(AP_ONLY) ? AP_ONLY : WIFI_INIT);
     }
 
     return true;
@@ -105,7 +105,7 @@ bool WiFiHandler::applyConfig(const SystemConfig& new_config, bool reconnect_sta
     } else if (!shouldAttemptSTA()) {
         WiFi.disconnect(false, true);
         sta_attempt_requested = false;
-        setStatus(shouldRunAPMode() ? AP_ONLY : WIFI_INIT);
+        setStatus(shouldRunAPModeForStatus(AP_ONLY) ? AP_ONLY : WIFI_INIT);
     }
 
     return true;
@@ -212,7 +212,7 @@ void WiFiHandler::setSTASuppressed(bool suppressed) {
         last_retry_started_at = 0;
         last_sta_reason = WL_IDLE_STATUS;
         WiFi.disconnect(false, true);
-        setStatus(shouldRunAPMode() ? AP_ONLY : WIFI_INIT);
+        setStatus(shouldRunAPModeForStatus(AP_ONLY) ? AP_ONLY : WIFI_INIT);
         INFO_PRINT("WiFi STA start suppressed until vibration gate opens");
         return;
     }
@@ -240,7 +240,7 @@ void WiFiHandler::setStatus(WiFiStatus status) {
 void WiFiHandler::beginSTAConnectAttempt(uint32_t now) {
     if (!shouldAttemptSTA()) {
         sta_attempt_requested = false;
-        setStatus(AP_ONLY);
+        setStatus(shouldRunAPModeForStatus(AP_ONLY) ? AP_ONLY : WIFI_INIT);
         return;
     }
 
@@ -258,7 +258,9 @@ void WiFiHandler::beginSTAConnectAttempt(uint32_t now) {
 
     WiFi.disconnect(false, true);
     stopAPMode();
-    WiFi.mode(WIFI_STA);
+    if (WiFi.getMode() != WIFI_STA) {
+        WiFi.mode(WIFI_STA);
+    }
     applySTAIPConfig();
     WiFi.begin(config.wifi_ssid, config.wifi_password);
 
@@ -317,11 +319,14 @@ void WiFiHandler::handleConnectingState(uint32_t now) {
         retry_count = 0;
         setStatus(WIFI_CONNECTED);
         stopAPMode();
-        WiFi.mode(WIFI_STA);
+        if (WiFi.getMode() != WIFI_STA) {
+            WiFi.mode(WIFI_STA);
+        }
         ALWAYS_INFO_PRINT("WiFi STA connected: SSID=%s IP=%s",
                           config.wifi_ssid,
                           WiFi.localIP().toString().c_str());
-        INFO_PRINT("SoftAP disabled while STA is connected (test mode)");
+        INFO_PRINT("WiFi mode policy active: %s",
+                   "STA connected -> AP disabled");
         log_heap_state("WIFI_STA_CONNECTED");
         return;
     }
@@ -356,9 +361,12 @@ void WiFiHandler::handleFailedState() {
     sta_attempt_requested = false;
     retry_count = WIFI_CONNECT_MAX_RETRIES;
     ERROR_PRINT("WiFi STA connection failed");
+    setStatus(WIFI_FAILED);
     ensureAPRunning();
-    INFO_PRINT("Switching to %s mode",
-               shouldRunAPMode() ? "AP-only (debug fallback)" : "STA-only fallback");
+    INFO_PRINT("WiFi failure policy: %s",
+               shouldRunAPModeForStatus(WIFI_FAILED)
+                   ? "AP fallback enabled"
+                   : "AP fallback disabled, device remains STA-only");
 }
 
 void WiFiHandler::ensureAPRunning() {
@@ -370,7 +378,7 @@ void WiFiHandler::ensureAPRunning() {
         return;
     }
 
-    if (!ap_started || (WiFi.getMode() != WIFI_AP_STA && WiFi.getMode() != WIFI_AP)) {
+    if (!ap_started || WiFi.getMode() != WIFI_AP_STA) {
         WiFi.mode(WIFI_AP_STA);
         startAPMode(config.ap_ssid, config.ap_password);
     }
@@ -385,19 +393,26 @@ void WiFiHandler::stopAPMode() {
 }
 
 bool WiFiHandler::shouldRunAPMode() const {
+    return shouldRunAPModeForStatus(getStatus());
+}
+
+bool WiFiHandler::shouldRunAPModeForStatus(WiFiStatus status) const {
     if (!config.wifi_ap_enabled) {
         return false;
     }
 
-    if (isConnected()) {
-        return false;
-    }
-
-    if (g_debug_mode) {
+    // If STA has never been configured, keep AP available for provisioning.
+    if (strlen(config.wifi_ssid) == 0) {
         return true;
     }
 
-    return false;
+    // Once STA is configured, normal mode stays STA-only.
+    if (!g_debug_mode) {
+        return false;
+    }
+
+    // In debug mode, expose AP only after STA failure / fallback.
+    return status == WIFI_FAILED || status == AP_ONLY;
 }
 
 String WiFiHandler::buildDefaultAPSSID() const {

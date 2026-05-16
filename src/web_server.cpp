@@ -24,6 +24,7 @@ extern MEMSTimingStats g_mems_timing_stats;
 namespace {
 // Heap protection: keep modest safety margins without blocking normal WS updates.
 constexpr size_t MIN_HEAP_FOR_GENERAL_JSON = 8192;
+constexpr size_t MIN_HEAP_FOR_FFT_JSON = 4096;
 constexpr size_t MIN_HEAP_FOR_WS_JSON = 4096;
 constexpr uint32_t WS_CLEANUP_INTERVAL_MS = 5000;
 constexpr uint32_t MQTT_WEB_PAUSE_MS = 15000;
@@ -138,6 +139,21 @@ void sendSPIFFSFileWithLog(AsyncWebServerRequest* request, const char* spiffs_pa
                 request->url().c_str(),
                 spiffs_path);
     request->send(404, "text/plain", "Not Found");
+}
+
+void appendJsonFixed(String& out, float value, uint8_t decimals) {
+    char buf[24];
+    if (!isfinite(value)) {
+        out += "0";
+        return;
+    }
+
+    dtostrf(static_cast<double>(value), 0, decimals, buf);
+    char* start = buf;
+    while (*start == ' ') {
+        ++start;
+    }
+    out += start;
 }
 
 String htmlShell(const String& title, const String& body) {
@@ -936,7 +952,7 @@ void WebServer::handleGetDashboard(AsyncWebServerRequest* request) {
 
 void WebServer::handleGetFFTSpectrum(AsyncWebServerRequest* request) {
     noteFFTRequest();
-    if (!hasEnoughHeap(MIN_HEAP_FOR_GENERAL_JSON)) {
+    if (!hasEnoughHeap(MIN_HEAP_FOR_FFT_JSON)) {
         ERROR_PRINT("Insufficient heap for FFT spectrum: %u bytes free", esp_get_free_heap_size());
         request->send(503, "application/json", "{\"error\":\"low memory\"}");
         return;
@@ -958,19 +974,25 @@ void WebServer::handleGetFFTSpectrum(AsyncWebServerRequest* request) {
         return;
     }
 
-    // Reduce FFT buffer - use 4096 instead of 8192
-    StaticJsonDocument<4096> doc;
-    char axis_value[2] = { axis, '\0' };
-    doc["axis"] = axis_value;
-    JsonArray freq = doc.createNestedArray("freq_hz");
-    JsonArray amp = doc.createNestedArray("amp_mm_s");
-    for (uint16_t i = 0; i < points; ++i) {
-        freq.add(freq_hz[i]);
-        amp.add(amp_mm_s[i]);
-    }
-
     String json;
-    serializeJson(doc, json);
+    json.reserve(64 + (points * 16));
+    json += "{\"axis\":\"";
+    json += axis;
+    json += "\",\"freq_hz\":[";
+    for (uint16_t i = 0; i < points; ++i) {
+        if (i > 0) {
+            json += ",";
+        }
+        appendJsonFixed(json, freq_hz[i], 1);
+    }
+    json += "],\"amp_mm_s\":[";
+    for (uint16_t i = 0; i < points; ++i) {
+        if (i > 0) {
+            json += ",";
+        }
+        appendJsonFixed(json, amp_mm_s[i], 3);
+    }
+    json += "]}";
     request->send(200, "application/json", json);
 }
 

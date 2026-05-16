@@ -210,10 +210,18 @@ void mems_task(void* parameter) {
     
     TickType_t xLastWakeTime = xTaskGetTickCount();
     uint32_t sample_count = 0;
+    std::unique_ptr<MEMSData> raw_data(new (std::nothrow) MEMSData());
     
     INFO_PRINT("MEMS task started");
     
     while (1) {
+        if (!raw_data) {
+            ERROR_PRINT("Failed to allocate persistent MEMS buffer on heap (largest=%u)", get_largest_free_block());
+            vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000));
+            raw_data.reset(new (std::nothrow) MEMSData());
+            continue;
+        }
+
         if (g_mqtt_handler.isTlsConnectInProgress()) {
             DEBUG_MEMS_PRINT("MEMS task paused during MQTTS connect mode");
             vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000));
@@ -226,14 +234,6 @@ void mems_task(void* parameter) {
             continue;
         }
         
-        // Read sensor data
-        std::unique_ptr<MEMSData> raw_data(new (std::nothrow) MEMSData());
-        if (!raw_data) {
-            ERROR_PRINT("Failed to allocate MEMS buffer on heap (largest=%u)", get_largest_free_block());
-            vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000));
-            continue;
-        }
-
         if (g_mems_sensor.readRawData(*raw_data)) {
             raw_data->timestamp_us = micros();
             
